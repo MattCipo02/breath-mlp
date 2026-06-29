@@ -4,11 +4,15 @@ import torch.nn as nn
 # =====================================================================
 # --- GENERAL ARCHITECTURE GENERATORS ---
 # =====================================================================
-def generate_breath_architecture(start_width, compression_factor=0.25, expansion_factor=2.0, min_width=16):
+def generate_breath_architecture(start_width, compression_factor=0.25, expansion_factor=2.0, min_width=16, output_dim=None):
     """
     Generates a decaying-oscillating (Breath) hidden layer size sequence.
     Example: 512, 0.25, 2.0 -> [512, 128, 256, 32, 64]
     """
+    # Core Rule: The minimum hidden layer width should not be smaller than the output dimension
+    if output_dim is not None:
+        min_width = max(min_width, output_dim)
+        
     layers_list = [start_width]
     current = start_width
     
@@ -45,8 +49,6 @@ def generate_deep_architecture(start_width, decay_factor=0.5, min_width=16):
         layers_list.append(current)
         current = int(current * decay_factor)
     return layers_list
-
-
 # =====================================================================
 # --- PYTORCH IMPLEMENTATION ---
 # =====================================================================

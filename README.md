@@ -94,6 +94,19 @@ Trained for 12 epochs on GPU (NVIDIA RTX 4070 Laptop).
 
 ---
 
+### 4. Image Denoising (ImageNet-32)
+Replication of the generative restoration (denoising) task from Chen et al. 2025. Trained for 2 epochs on GPU (RTX 4070 Laptop) with 4x data augmentation on the full 1.28 million natural image dataset ($\sigma = 0.25$ Gaussian noise).
+
+| Model | Width Configuration | Parameters | Train Time (per Epoch) | Test PSNR |
+| :--- | :--- | :---: | :---: | :---: |
+| **Hourglass MLP (Paper)** | $d_z = 3546, d_h = 1560, L = 4$ | **55.20M** | 458.3s (7.6m) | **20.88 dB** |
+| 🏆 **Breath MLP** | $d_z = 9216, d_{\text{min}} = 512$ | **68.37M** | **248.0s (4.1m)** | **20.52 dB** |
+
+* **High-Dimensional Scaling**: By setting the minimum bottleneck size $d_{\text{min}} = 512$, Breath MLP avoids information loss on high-dimensional pixel reconstruction.
+* **Compute-Optimal Denoising**: The decaying-oscillating shape of Breath MLP allows it to train **83.3% faster** per epoch than the paper's Hourglass MLP (4.1 minutes vs 7.6 minutes) while matching its performance within a marginal **0.36 dB** difference.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Installation
