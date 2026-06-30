@@ -175,10 +175,10 @@ Replication of the generative restoration (denoising) task from Chen et al. 2025
 
 | Model | Width Configuration | Parameters | Train Time (per Epoch) | Test PSNR |
 | :--- | :--- | :---: | :---: | :---: |
-| **Hourglass MLP (Paper)** | $d_z = 3546, d_h = 1560, L = 4$ | **55.20M** | 458.3s (7.6m) | **20.88 dB** |
-| 🏆 **Breath MLP (Purist)** | `[9216, 2304, 4608, 1152, 2304, 576, 1152]` | **76.71M** | 490.7s (8.2m) | **18.35 dB** |
+| 🏆 **Hourglass MLP (Paper)** | $d_z = 3546, d_h = 1560, L = 4$ | **55.20M** | **458.3s (7.6m)** | **20.88 dB** |
+| Breath MLP (Purist) | `[9216, 2304, 4608, 1152, 2304, 576, 1152]` | 76.71M *(+39%)* | 490.7s (8.2m) | 18.35 dB *(-2.53 dB)* |
 
-* **Deep Optimization Trade-Off:** Correcting the compression bug increases the network's depth from 5 to 7 hidden layers. For generative autoencoders, this added depth requires a longer training budget or learning rate schedules to fully converge. Under a highly restricted budget of just 2 epochs, the purist Breath MLP reaches a strong **`18.35 dB` PSNR**, showing standard generative reconstruction behavior while highlighting the optimization trade-offs of deeper structural shapes.
+> ⚠️ **Note:** In this specific experiment (2-epoch budget), the Hourglass MLP wins on all metrics: fewer parameters, slightly less training time per epoch, and significantly better PSNR. This is attributed to the **deeper structural shape** of the purist Breath MLP (7 hidden layers vs the Hourglass's shallow wide structure), which requires a longer training budget and appropriate learning rate scheduling to reach its optimal convergence point. With more epochs or a warmer/cyclic learning rate, the Breath MLP is expected to close this gap.
 
 ---
 
@@ -242,6 +242,35 @@ model = BreathMLP(
 
 print(model)
 ```
+
+## 📊 Final Conclusions
+
+The following table summarizes which architecture performs best in each benchmark, under the **purist rule set** (constant oscillation ratio 0.25/2.0, continuous decay, full-rank bottlenecks, parameter-matched baselines):
+
+| Benchmark | Task Type | Winner | Key Metric | Δ vs. Baseline |
+| :--- | :--- | :--- | :---: | :---: |
+| **SARCOS (Robotics)** | Regression | Breath + Skips | $R^2 = 0.9881$ | *-30.6% params* |
+| **California Housing** | Regression | **Breath Standard** | $R^2 = 0.7939$ | *+1.16% $R^2$, -30.1% params* |
+| **MNIST** | Classification | Deep Standard | Acc = 98.17% | *Breath within 0.17%* |
+| **CIFAR-10 (4096)** | Classification | **Breath (SiLU + LN)** | Acc = 54.18% | *Best activation config* |
+| **CIFAR-10 (8192)** | Classification | **Breath (SiLU + LN)** | Acc = 51.55% | *+13.17% over GELU* |
+| **ImageNet-32 Denoising** | Generative | Hourglass MLP (Paper) | PSNR = 20.88 dB | *Breath needs more epochs* |
+| **ViT FFN (CIFAR-10)** | Vision Transformer | **Breath FFN** | Acc = 57.71% | *+3.98%, -4.7% params, -9% time* |
+| **NanoGPT FFN (Shakespeare)** | Language Model | **Breath FFN** | Val Loss = 1.610 | *-0.15 loss, -14% perplexity* |
+
+### Key Takeaways
+
+1. **Tabular Data & Shallow MLPs:** The Breath MLP's decaying oscillation provides a strong structural prior for regression tasks, outperforming parameter-matched flat baselines while using significantly fewer parameters.
+
+2. **Image Classification:** Breath MLPs require **SiLU + LayerNorm** as depth increases. Without normalization, the deeper purist shape suffers from variance explosion and potential divergence. With it, it outperforms all other configurations.
+
+3. **Generative Restoration (Denoising):** Under short training budgets, the deeper purist Breath MLP underperforms shallow wide architectures like the Hourglass MLP. Generative tasks require the bottleneck to act as a compression filter, which is better served by a shallow structure when training is time-constrained.
+
+4. **Transformer Integration:** Breath MLP is a **strong drop-in replacement for FFN blocks** in both vision (ViT) and language (GPT) Transformers, consistently outperforming parameter-matched standard FFNs through better generalization and reduced overfitting.
+
+5. **Future Directions:** Testing with relaxed oscillation ratios (e.g., 1/2, 1/3), longer training schedules for the denoising task, and integration into modern Transformer variants (LLaMA, GPT-4 style) remain promising next steps.
+
+---
 
 ## 📜 References
 * Chen, M.-H., et al. (2025). *"Rethinking the shape convention of an MLP"*. arXiv preprint.
