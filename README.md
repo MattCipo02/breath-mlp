@@ -247,26 +247,26 @@ print(model)
 
 The following table summarizes which architecture performs best in each benchmark, under the **purist rule set** (constant oscillation ratio 0.25/2.0, continuous decay, full-rank bottlenecks, parameter-matched baselines):
 
-| Benchmark | Task Type | Winner | Key Metric | Δ vs. Baseline |
-| :--- | :--- | :--- | :---: | :---: |
-| **SARCOS (Robotics)** | Regression | Breath + Skips | $R^2 = 0.9881$ | *-30.6% params* |
-| **California Housing** | Regression | **Breath Standard** | $R^2 = 0.7939$ | *+1.16% $R^2$, -30.1% params* |
-| **MNIST** | Classification | Deep Standard | Acc = 98.17% | *Breath within 0.17%* |
-| **CIFAR-10 (4096)** | Classification | **Breath (SiLU + LN)** | Acc = 54.18% | *Best activation config* |
-| **CIFAR-10 (8192)** | Classification | **Breath (SiLU + LN)** | Acc = 51.55% | *+13.17% over GELU* |
-| **ImageNet-32 Denoising** | Generative | Hourglass MLP (Paper) | PSNR = 20.88 dB | *Breath needs more epochs* |
-| **ViT FFN (CIFAR-10)** | Vision Transformer | **Breath FFN** | Acc = 57.71% | *+3.98%, -4.7% params, -9% time* |
-| **NanoGPT FFN (Shakespeare)** | Language Model | **Breath FFN** | Val Loss = 1.610 | *-0.15 loss, -14% perplexity* |
+| Benchmark | Task Type | Winner | Baseline Params | Breath Params | Key Metric | Δ Metric |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| **SARCOS (Robotics)** | Regression | Breath + Skips | 203,857 | **141,473** *(-30.6%)* | $R^2 = 0.9881$ | *vs `0.9908` (Deep+Skips)* |
+| **California Housing** | Regression | **Breath Standard** | 179,713 | **125,521** *(-30.1%)* | $R^2 = 0.7939$ | *+1.16% vs Deep Standard* |
+| **MNIST** | Classification | Deep Standard | **1,503,898** | 1,325,274 *(-11.9%)* | Acc = 98.17% | *Breath within 0.17%* |
+| **CIFAR-10 (4096)** | Classification | **Breath (SiLU + LN)** | — | **20,923,882** | Acc = 54.18% | *+9.84% over ReLU* |
+| **CIFAR-10 (8192)** | Classification | **Breath (SiLU + LN)** | — | **58,486,074** | Acc = 51.55% | *+13.17% over GELU* |
+| **ImageNet-32 Denoising** | Generative | Hourglass (Paper) | **55.20M** | 76.71M *(+39%)* | PSNR = 20.88 dB | *Breath −2.53 dB, needs more epochs* |
+| **ViT FFN (CIFAR-10)** | Vision Transformer | **Breath FFN** | 6,830,410 | **6,538,570** *(-4.3%)* | Acc = 57.71% | *+3.98%, −9% train time* |
+| **NanoGPT FFN (Shakespeare)** | Language Model | **Breath FFN** | 16,624,705 | 17,420,353 *(+4.8%)* | Val Loss = 1.610 | *−0.15 loss, −14% perplexity* |
 
 ### Key Takeaways
 
-1. **Tabular Data & Shallow MLPs:** The Breath MLP's decaying oscillation provides a strong structural prior for regression tasks, outperforming parameter-matched flat baselines while using significantly fewer parameters.
+1. **Parameter Efficiency on Tabular Tasks:** The most striking result of the purist experiments is the **parameter efficiency** of Breath MLP on regression. On SARCOS, Breath + Skips matches Deep Standard's $R^2$ while using **30.6% fewer parameters** (141k vs 203k). On California Housing, Breath Standard actually *outperforms* the baseline $R^2$ while using **30.1% fewer parameters** (125k vs 179k). This demonstrates that the decaying oscillation topology encodes a stronger structural prior than flat deep networks for tabular data.
 
-2. **Image Classification:** Breath MLPs require **SiLU + LayerNorm** as depth increases. Without normalization, the deeper purist shape suffers from variance explosion and potential divergence. With it, it outperforms all other configurations.
+2. **Image Classification:** Breath MLPs require **SiLU + LayerNorm** as depth increases. Without normalization, the deeper purist shape suffers from variance explosion and potential divergence. With it, it outperforms all other configurations. Note that for MNIST, the Breath model achieves nearly identical accuracy to the Deep Standard while using **11.9% fewer parameters** (1.33M vs 1.50M).
 
-3. **Generative Restoration (Denoising):** Under short training budgets, the deeper purist Breath MLP underperforms shallow wide architectures like the Hourglass MLP. Generative tasks require the bottleneck to act as a compression filter, which is better served by a shallow structure when training is time-constrained.
+3. **Generative Restoration (Denoising):** Under short training budgets, the deeper purist Breath MLP underperforms shallow wide architectures like the Hourglass MLP. Crucially, the purist correction **increased the model size by +39%** (76.71M vs 55.20M) due to the deeper shape, while achieving a lower PSNR. For generative tasks, a shallower shape with more training time is preferred.
 
-4. **Transformer Integration:** Breath MLP is a **strong drop-in replacement for FFN blocks** in both vision (ViT) and language (GPT) Transformers, consistently outperforming parameter-matched standard FFNs through better generalization and reduced overfitting.
+4. **Transformer Integration & Parameter Overhead:** On ViT, the Breath FFN achieves **+3.98% accuracy** while using **4.3% fewer parameters** (6.54M vs 6.83M total) and training **9% faster** — a triple win. On NanoGPT, the Breath FFN uses slightly more parameters (+4.8%), but compensates with significantly better generalization, reducing validation loss by 0.15 and perplexity by **14%**.
 
 5. **Future Directions:** Testing with relaxed oscillation ratios (e.g., 1/2, 1/3), longer training schedules for the denoising task, and integration into modern Transformer variants (LLaMA, GPT-4 style) remain promising next steps.
 
