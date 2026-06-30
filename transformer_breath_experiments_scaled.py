@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import numpy as np
 import math
 import time
 import os
@@ -22,7 +23,7 @@ print("="*60)
 # Hyperparameters (SCALED UP)
 batch_size = 64
 block_size = 128
-max_iters = 2500
+max_iters = 1000  # Reduced to 1000 for fast multi-seed evaluation
 eval_interval = 250
 learning_rate = 1e-3
 eval_iters = 50
@@ -74,7 +75,7 @@ def estimate_loss(model):
             X, Y = get_batch(split)
             logits, loss = model(X, Y)
             losses[k] = loss.item()
-        out[split] = losses.mean()
+        out[split] = losses.mean().item()
     model.train()
     return out
 
@@ -201,17 +202,23 @@ class GPT(nn.Module):
 # =====================================================================
 # --- RUN BENCHMARKS ---
 # =====================================================================
-def train_gpt(ffn_type):
+def train_gpt(ffn_type, seed):
     print("\n" + "="*70)
-    print(f" ADDESTRAMENTO GPT SCALATO CON FFN TYPE: {ffn_type.upper()}")
+    print(f" ADDESTRAMENTO GPT SCALATO CON FFN TYPE: {ffn_type.upper()} | SEED: {seed}")
     print("="*70)
     
+    # Set explicit random seeds
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        
     model = GPT(vocab_size, d_model, n_head, n_layer, block_size, ffn_type)
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f" -> Parametri Addestrabili Totali: {trainable_params:,}")
     
     # Check FFN parameters in 1 block
     ffn_params = sum(p.numel() for p in model.transformer.h[0].ffn.parameters())
+    print(f" -> Parametri Addestrabili Totali: {trainable_params:,}")
     print(f" -> Parametri FFN per singolo Blocco: {ffn_params:,}")
 
     model = model.to(device)
@@ -240,34 +247,57 @@ def train_gpt(ffn_type):
     generated_ids = model.generate(context, max_new_tokens=250)
     generated_text = decode(generated_ids[0].tolist())
     
-    return trainable_params, elapsed, losses[-1][1], generated_text
+    return trainable_params, elapsed, losses[-1][2], generated_text
 
-# Run both models
-param_std, time_std, loss_std, text_std = train_gpt("standard")
-param_breath, time_breath, loss_breath, text_breath = train_gpt("breath")
+# Run multi-seed validation
+SEEDS = [42, 137, 2026]
+results_raw = []
+last_text_std = ""
+last_text_br = ""
 
-# Save results to csv
-results = [
-    {"Config": "Standard", "Params": param_std, "Time_Sec": round(time_std, 1), "Final_Loss": loss_std},
-    {"Config": "Breath", "Params": param_breath, "Time_Sec": round(time_breath, 1), "Final_Loss": loss_breath}
-]
-df = pd.DataFrame(results)
-df.to_csv("transformer_scaled_results.csv", index=False)
+for seed in SEEDS:
+    # Run Standard
+    p_std, t_std, loss_std, text_std = train_gpt("standard", seed)
+    results_raw.append({"Config": "Standard", "Seed": seed, "Params": p_std, "Time": t_std, "Val_Loss": loss_std})
+    last_text_std = text_std
+    
+    # Run Breath
+    p_br, t_br, loss_br, text_br = train_gpt("breath", seed)
+    results_raw.append({"Config": "Breath", "Seed": seed, "Params": p_br, "Time": t_br, "Val_Loss": loss_br})
+    last_text_br = text_br
+
+df_raw = pd.DataFrame(results_raw)
+df_raw.to_csv("transformer_scaled_raw_multi_seed_results.csv", index=False)
+
+# Compute aggregates
+summary = []
+for config in ["Standard", "Breath"]:
+    sub = df_raw[df_raw["Config"] == config]
+    summary.append({
+        "Config": config,
+        "Params": sub["Params"].iloc[0],
+        "Time_mean": sub["Time"].mean(),
+        "Time_std": sub["Time"].std(),
+        "Val_Loss_mean": sub["Val_Loss"].mean(),
+        "Val_Loss_std": sub["Val_Loss"].std()
+    })
+df_sum = pd.DataFrame(summary)
+df_sum.to_csv("transformer_scaled_results.csv", index=False)
 
 # Final Comparison Report
-print("\n" + "="*80)
-print("             REPORT COMPARATIVO NANO-GPT SCALATO")
-print("="*80)
-print(f"Configurazione FFN        | Parametri | Tempo Addestramento | Loss Finale")
-print(f"--------------------------|-----------|--------------------|------------")
-print(f"Standard (2-Layer Flat)   | {param_std:9,} | {time_std:17.1f}s | {loss_std:.4f}")
-print(f"Breath (Multi-Cycle Skips)| {param_breath:9,} | {time_breath:17.1f}s | {loss_breath:.4f}")
-print("="*80)
+print("\n" + "="*90)
+print("             REPORT COMPARATIVO MULTI-SEED NANO-GPT SCALATO")
+print("="*90)
+print(f"Configurazione FFN        | Parametri | Tempo (medio) | Val Loss Media ({max_iters} iter)")
+print(f"--------------------------|-----------|---------------|--------------------------")
+for row in summary:
+    print(f"{row['Config']:26s} | {row['Params']:9,} | {row['Time_mean']:11.1f}s | {row['Val_Loss_mean']:.4f} +/- {row['Val_Loss_std']:.4f}")
+print("="*90)
 
-print("\n" + "-"*35 + " TESTO GENERATO DA GPT STANDARD " + "-"*35)
-print(text_std)
+print("\n" + "-"*35 + " TESTO GENERATO DA GPT STANDARD (SEED 2026) " + "-"*35)
+print(last_text_std)
 print("-"*100)
 
-print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATH " + "-"*35)
-print(text_breath)
+print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATH (SEED 2026) " + "-"*35)
+print(last_text_br)
 print("-"*100)

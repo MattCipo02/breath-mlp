@@ -141,6 +141,7 @@ class BreathMLP(nn.Module):
             
             compression_tensors[i] = comp_tensor
             x = comp_tensor
+            last_comp_idx = i
             
             if i + 1 < len(self.hidden_layers):
                 x = self.act(self.linears[linear_idx](x))
@@ -152,32 +153,57 @@ class BreathMLP(nn.Module):
         out = self.output_layer(x)
         return out
 
+
 class DeepMLP(nn.Module):
     """
     Standard Deep MLP implementation in PyTorch with projected skip connections every 2 layers.
+    Supports customizable activation and LayerNorm.
     """
-    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True):
+    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True, activation="relu", use_norm=False):
         super().__init__()
         self.hidden_layers = hidden_layers
         self.use_skips = use_skips
+        self.activation = activation
+        self.use_norm = use_norm
         
+        # Optional Input LayerNorm
+        if use_norm:
+            self.input_norm = nn.LayerNorm(input_dim)
+            
+        # Selectable Activation
+        if activation == "gelu":
+            self.act = nn.GELU()
+        elif activation == "silu":
+            self.act = nn.SiLU()
+        else:
+            self.act = nn.ReLU()
+            
         self.linears = nn.ModuleList()
         self.linears.append(nn.Linear(input_dim, hidden_layers[0]))
         self.projections = nn.ModuleDict()
         
+        if use_norm:
+            self.norms = nn.ModuleDict()
+            
         for idx in range(1, len(hidden_layers)):
             self.linears.append(nn.Linear(hidden_layers[idx-1], hidden_layers[idx]))
             
+            # Optional LayerNorm per layer
+            if use_norm:
+                self.norms[f"norm_{idx}"] = nn.LayerNorm(hidden_layers[idx])
+                
             if use_skips and idx % 2 == 1 and idx >= 3:
                 proj_key = f"proj_{idx-2}_to_{idx}"
                 self.projections[proj_key] = nn.Linear(hidden_layers[idx-2], hidden_layers[idx])
                 
         self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
-        self.relu = nn.ReLU()
         
     def forward(self, x):
+        if self.use_norm:
+            x = self.input_norm(x)
+            
         tensors = []
-        x = self.relu(self.linears[0](x))
+        x = self.act(self.linears[0](x))
         tensors.append(x)
         
         for idx in range(1, len(self.hidden_layers)):
@@ -188,9 +214,15 @@ class DeepMLP(nn.Module):
                 proj = self.projections[proj_key](tensors[idx-2])
                 current = current + proj
                 
-            current = self.relu(current)
+            current = self.act(current)
+            if self.use_norm:
+                current = self.norms[f"norm_{idx}"](current)
+                
             tensors.append(current)
             x = current
             
         out = self.output_layer(x)
         return out
+
+
+

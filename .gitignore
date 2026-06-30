@@ -10,7 +10,14 @@ __pycache__/
 # Data
 *.mat
 *.csv
+data/
+*.log
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Visualizations and datasets
+*.png
+*.txt
+
