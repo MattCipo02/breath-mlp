@@ -206,6 +206,10 @@ def main():
                         help="Freeze the input projection layer at random init (Hourglass only)")
     parser.add_argument("--min_width", type=int, default=16,
                         help="Minimum width for Breath MLP layers")
+    parser.add_argument("--activation", type=str, default="relu", choices=["gelu", "silu", "relu"],
+                        help="Activation function for BreathMLP (gelu, silu, relu)")
+    parser.add_argument("--use_norm", type=str, default="false", choices=["true", "false"],
+                        help="Use LayerNorm inside BreathMLP (true, false)")
     parser.add_argument("--ntfy_topic", type=str, default="",
                         help="ntfy topic to send push notifications to your phone")
     
@@ -229,12 +233,13 @@ def main():
     
     # Build Model
     fixed_proj_bool = args.fixed_proj == "true"
+    use_norm_bool = args.use_norm == "true"
     if args.model == "hourglass":
         model = HourglassMLP(input_dim=3072, dz=args.dz, dh=args.dh, L=args.L, fixed_projection=fixed_proj_bool)
     elif args.model == "breath":
-        breath_layers = generate_breath_architecture(args.dz, min_width=args.min_width, output_dim=3072)
+        breath_layers = generate_breath_architecture(args.dz, min_width=args.min_width)
         print(f"Generating Breath MLP layers: {breath_layers}")
-        model = BreathMLP(input_dim=3072, hidden_layers=breath_layers, output_dim=3072, use_skips=True)
+        model = BreathMLP(input_dim=3072, hidden_layers=breath_layers, output_dim=3072, use_skips=True, activation=args.activation, use_norm=use_norm_bool)
     else:
         model = ConventionalMLP(input_dim=3072, dh=args.dh, L=args.L)
         

@@ -19,17 +19,30 @@ from breath_mlp import (
     DeepMLP
 )
 
+import argparse
+
 # =====================================================================
 # --- BENCHMARK CONFIGURATION ---
 # =====================================================================
-DATASET = "sarcos"          # Options: "sarcos", "california", "mnist"
-START_WIDTH = 512           # Width of the first hidden layer (e.g., 512, 1024)
-COMPRESSION_FACTOR = 0.25   # Factor to compress layers
-EXPANSION_FACTOR = 2.0      # Factor to expand layers
-DECAY_FACTOR = 0.5          # Decay factor for Deep MLP
-EPOCHS = 40
-BATCH_SIZE = 64
-LEARNING_RATE = 0.001
+parser = argparse.ArgumentParser(description="Breath MLP Tabular/MNIST Benchmarks")
+parser.add_argument("--dataset", type=str, default="sarcos", choices=["sarcos", "california", "mnist"], help="Dataset to use")
+parser.add_argument("--start_width", type=int, default=512, help="Width of first hidden layer")
+parser.add_argument("--compression_factor", type=float, default=0.25, help="Compression factor")
+parser.add_argument("--expansion_factor", type=float, default=2.0, help="Expansion factor")
+parser.add_argument("--decay_factor", type=float, default=0.5, help="Decay factor for Deep MLP")
+parser.add_argument("--epochs", type=int, default=40, help="Number of training epochs")
+parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+args = parser.parse_args()
+
+DATASET = args.dataset
+START_WIDTH = args.start_width
+COMPRESSION_FACTOR = args.compression_factor
+EXPANSION_FACTOR = args.expansion_factor
+DECAY_FACTOR = args.decay_factor
+EPOCHS = args.epochs
+BATCH_SIZE = args.batch_size
+LEARNING_RATE = args.lr
 
 # Automatically use GPU for PyTorch if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -34,7 +34,7 @@ def generate_breath_architecture(start_width, compression_factor=0.25, expansion
         if expanded < min_width:
             break
         layers_list.append(expanded)
-        current = compressed
+        current = expanded
         
     return layers_list
 
@@ -57,14 +57,31 @@ class BreathMLP(nn.Module):
     Breath MLP implementation in PyTorch.
     Alternates between compression and expansion, with projected skip connections between bottlenecks.
     """
-    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True):
+    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True, activation="relu", use_norm=False):
         super().__init__()
         self.hidden_layers = hidden_layers
         self.use_skips = use_skips
+        self.activation = activation
+        self.use_norm = use_norm
         
+        # Optional Input LayerNorm
+        if use_norm:
+            self.input_norm = nn.LayerNorm(input_dim)
+        
+        # Selectable Activation
+        if activation == "gelu":
+            self.act = nn.GELU()
+        elif activation == "silu":
+            self.act = nn.SiLU()
+        else:
+            self.act = nn.ReLU()
+            
         self.linears = nn.ModuleList()
         self.linears.append(nn.Linear(input_dim, hidden_layers[0]))
         self.projections = nn.ModuleDict()
+        
+        if use_norm:
+            self.norms = nn.ModuleDict()
         
         i = 1
         last_comp_idx = None
@@ -72,6 +89,10 @@ class BreathMLP(nn.Module):
             comp_units = hidden_layers[i]
             prev_units = hidden_layers[i-1]
             self.linears.append(nn.Linear(prev_units, comp_units))
+            
+            # Optional Bottleneck LayerNorm
+            if use_norm:
+                self.norms[f"norm_{i}"] = nn.LayerNorm(comp_units)
             
             if use_skips and last_comp_idx is not None:
                 prev_comp_units = hidden_layers[last_comp_idx]
@@ -88,10 +109,14 @@ class BreathMLP(nn.Module):
                 i += 1
                 
         self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
-        self.relu = nn.ReLU()
         
     def forward(self, x):
-        x = self.relu(self.linears[0](x))
+        # 1. Normalize input if enabled
+        if self.use_norm:
+            x = self.input_norm(x)
+        
+        # 2. First projection & activation
+        x = self.act(self.linears[0](x))
         compression_tensors = {}
         
         linear_idx = 1
@@ -107,12 +132,18 @@ class BreathMLP(nn.Module):
                 proj = self.projections[proj_key](prev_comp_tensor)
                 comp_tensor = comp_tensor + proj
                 
-            comp_tensor = self.relu(comp_tensor)
+            # Apply activation
+            comp_tensor = self.act(comp_tensor)
+            
+            # Apply LayerNorm if enabled
+            if self.use_norm:
+                comp_tensor = self.norms[f"norm_{i}"](comp_tensor)
+            
             compression_tensors[i] = comp_tensor
             x = comp_tensor
             
             if i + 1 < len(self.hidden_layers):
-                x = self.relu(self.linears[linear_idx](x))
+                x = self.act(self.linears[linear_idx](x))
                 linear_idx += 1
                 i += 2
             else:
