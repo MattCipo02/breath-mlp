@@ -229,24 +229,40 @@ class FeaturePooling(nn.Module):
     """
     Feature-dimension 1D pooling module.
     Downsamples a 1D feature vector of shape [batch_size, in_features]
-    to [batch_size, out_features] using Adaptive Max/Avg Pooling.
+    to [batch_size, out_features] using Adaptive Max/Avg/Hybrid Pooling.
     """
     def __init__(self, out_features, pool_type="max"):
         super().__init__()
         self.out_features = out_features
         self.pool_type = pool_type
+        
         if pool_type == "max":
             self.pool = nn.AdaptiveMaxPool1d(out_features)
-        else:
+        elif pool_type == "avg":
             self.pool = nn.AdaptiveAvgPool1d(out_features)
+        elif pool_type == "hybrid":
+            self.max_pool = nn.AdaptiveMaxPool1d(out_features)
+            self.avg_pool = nn.AdaptiveAvgPool1d(out_features)
+            self.alpha = nn.Parameter(torch.zeros(1))
+        else:
+            raise ValueError(f"Unknown pool_type: {pool_type}. Choose 'max', 'avg', or 'hybrid'.")
             
     def forward(self, x):
         # Input shape: [batch_size, in_features]
         # Unsqueeze to add a channel dimension: [batch_size, 1, in_features]
         x_unsqueezed = x.unsqueeze(1)
-        out = self.pool(x_unsqueezed)
+        
+        if self.pool_type == "hybrid":
+            max_val = self.max_pool(x_unsqueezed)
+            avg_val = self.avg_pool(x_unsqueezed)
+            weight = torch.sigmoid(self.alpha)
+            out = weight * max_val + (1 - weight) * avg_val
+        else:
+            out = self.pool(x_unsqueezed)
+            
         # Squeeze to return to: [batch_size, out_features]
         return out.squeeze(1)
+
 
 
 class BreathMLPPool(nn.Module):
