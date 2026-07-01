@@ -26,7 +26,6 @@ from breath_mlp import (
     generate_deep_architecture,
     BreathMLP,
     BreathMLPPool,
-    BreathMLPPurePool,
     DeepMLP
 )
 
@@ -139,18 +138,6 @@ def make_model(config):
             output_dim=output_dim, use_skips=config["use_skips"],
             pool_type="avg", activation=args.activation, use_norm=args.use_norm
         )
-    elif config["type"] == "breath_pure_pool_max":
-        return BreathMLPPurePool(
-            input_dim=input_dim, hidden_layers=config["layers"],
-            output_dim=output_dim, use_skips=config["use_skips"],
-            pool_type="max", activation=args.activation, use_norm=args.use_norm
-        )
-    elif config["type"] == "breath_pure_pool_avg":
-        return BreathMLPPurePool(
-            input_dim=input_dim, hidden_layers=config["layers"],
-            output_dim=output_dim, use_skips=config["use_skips"],
-            pool_type="avg", activation=args.activation, use_norm=args.use_norm
-        )
 
 def count_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -160,8 +147,6 @@ configs = [
     {"name": "Breath + Skips (Lin)",  "type": "breath_linear",    "layers": breath_layers, "use_skips": True},
     {"name": "BreathPool Max + Skips","type": "breath_pool_max",   "layers": breath_layers, "use_skips": True},
     {"name": "BreathPool Avg + Skips","type": "breath_pool_avg",   "layers": breath_layers, "use_skips": True},
-    {"name": "PurePool Max + Skips",  "type": "breath_pure_pool_max", "layers": breath_layers, "use_skips": True},
-    {"name": "PurePool Avg + Skips",  "type": "breath_pure_pool_avg", "layers": breath_layers, "use_skips": True},
 ]
 
 # ======================================================================

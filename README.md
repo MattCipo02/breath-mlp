@@ -293,25 +293,22 @@ The following table summarizes which architecture performs best in each benchmar
 1. **Parameter Efficiency on Tabular Tasks (Robotics & Housing):** Under 5-fold cross-validation, **Breath + Skips** matches flat baselines while significantly saving parameters. On SARCOS, it achieves `0.9885` R2 (with the lowest variance, $\pm 0.0003$) saving **24.1% parameters** compared to Deep Standard (141k vs 186k), and **30.6% parameters** compared to Deep + Skips. On California Housing, **Breath + Skips** matches Deep Standard (`0.8006` vs `0.8030`) while saving **25.0% parameters** (134k vs 179k).
 
 2. **Image Classification (MNIST & CIFAR-10):** Under 5-fold cross-validation on MNIST, **Breath + Skips** actually outperforms Deep Standard in absolute accuracy (`97.33%` vs `97.20%`) while using **11.9% fewer parameters** (1.33M vs 1.50M). As network depth increases (like in CIFAR-10), Breath MLPs require **SiLU + LayerNorm** to prevent gradient variance explosion. With proper normalization, it outperforms all other configurations.
+* **Reconstruction Constraints & Low-Rank Latents:** For high-dimensional reconstruction (like 3072-dimensional raw image pixel spaces), the purist rules enforce bottlenecks $\ge 3072$, leading to parameter explosion. Breath MLP is therefore mathematically less suited for direct raw pixel-space reconstruction and is instead designed to process low-dimensional latent features (e.g., embedding spaces or representations produced by autoencoder bottlenecks).
 
-3. **Reconstruction Constraints & Low-Rank Latents:** For high-dimensional reconstruction (like 3072-dimensional raw image pixel spaces), the purist rules enforce bottlenecks $\ge 3072$, leading to parameter explosion. Breath MLP is therefore mathematically less suited for direct raw pixel-space reconstruction and is instead designed to process low-dimensional latent features (e.g., embedding spaces or representations produced by autoencoder bottlenecks).
+* **Transformer Integration & Generalization Stability:** On ViT, the Breath FFN represents a clean win, yielding **+2.95% average test accuracy** while using **4.3% fewer parameters** (6.54M vs 6.83M total) and training **4% faster** on average. On NanoGPT, the comparison represents a **trade-off**: the Breath FFN reduces the average validation loss by **0.04** ($1.5345$ vs $1.5750$) and significantly stabilizes training (lowering variance by **3.6x**), but at the cost of a **+4.8% increase in total parameters** and a **+3.7% increase in training time**.
 
-4. **Transformer Integration & Generalization Stability:** On ViT, the Breath FFN represents a clear win, yielding **+2.95% average test accuracy** while using **4.3% fewer parameters** (6.54M vs 6.83M total) and training **4% faster** on average. On NanoGPT, the comparison represents a **trade-off**: the Breath FFN reduces the average validation loss by **0.04** ($1.5345$ vs $1.5750$) and significantly stabilizes training (lowering variance by **3.6x**), but at the cost of a **+4.8% increase in total parameters** and a **+3.7% increase in training time**.
-
-5. **Future Directions & Rule Relaxation:** Testing with relaxed oscillation ratios (e.g., 1/2, 1/3) and, crucially, investigating the **relaxation of purist constraints** (e.g., allowing bottleneck widths to go below $d_{\text{out}}$ via low-rank final projections) represents a key path forward. Such relaxations would drastically expand the scope of application to raw image, video, and audio processing without parameter explosion, while preserving the regularizing benefits of oscillating signal paths. Additionally, integration into modern Transformer variants (LLaMA, GPT-4 style) remains a highly promising next step.
-
----
+* **Future Directions & Rule Relaxation:** Testing with relaxed oscillation ratios (e.g., 1/2, 1/3) and, crucially, investigating the **relaxation of purist constraints** (e.g., allowing bottleneck widths to go below $d_{\text{out}}$ via low-rank final projections) represents a key path forward. Such relaxations would drastically expand the scope of application to raw image, video, and audio processing without parameter explosion, while preserving the regularizing benefits of oscillating signal paths. Additionally, integration into modern Transformer variants (LLaMA, GPT-4 style) remains a highly promising next step.
 
 ---
 
-## ⚡ 6. Feature Pooling & Parameter-Free Compression (BreathMLPPool & PurePool)
+## ⚡ 6. Feature Pooling & Parameter-Free Compression (BreathMLPPool)
 
 To maximize parameter efficiency and accelerate training times, we investigated replacing the linear compression layers in the Breath MLP with parameter-free **1D Adaptive Feature Pooling** (Max and Average pooling). 
 
-### 📐 The Resizing Challenge for Skip Connections
-Because consecutive bottlenecks decay in size (e.g., from $128 \to 64 \to 16$), direct identity skip connections are impossible due to size mismatches. To resolve this, we evaluated two strategies:
-1. **`BreathPool` (Hybrid):** Uses non-trainable 1D Pooling for the main compression path, but retains a **trainable linear layer** (`nn.Linear`) to project/resize the skip connection between bottlenecks.
-2. **`PurePool` (100% Parameter-Free):** Uses non-trainable 1D Pooling for both the main compression path and the skip connection resizing (e.g., applying `AdaptiveAvgPool1d` or `AdaptiveMaxPool1d` directly to the previous bottleneck activations). This model has **zero trainable weights/biases** in any compression or skip path.
+### 📐 Parameter-Free Compression and Skip Resizing
+Because consecutive bottlenecks decay in size (e.g., from $128 \to 64 \to 16$), direct identity skip connections are impossible due to size mismatches. To resolve this, **`BreathMLPPool`** uses non-trainable 1D Pooling for **both** the main compression path and the skip connection resizing (e.g., applying `AdaptiveAvgPool1d` or `AdaptiveMaxPool1d` to the previous bottleneck activations to downsample them). 
+
+As a result, this model has **zero trainable weights/biases** in any compression or skip path, relying entirely on parameter-free pooling operations.
 
 ---
 
@@ -326,10 +323,8 @@ All models were evaluated under identical conditions (ReLU, No Norm, Adam/AdamW,
 | :--- | :---: | :---: | :---: | :---: |
 | **Deep Standard** | 186,369 | 85s | `0.9888 +/- 0.0007` | `4.6784 +/- 0.2952` |
 | **Breath + Skips (Lin)** | 141,473 | 106s | `0.9878 +/- 0.0006` | `5.1242 +/- 0.2959` |
-| **BreathPool Max + Skips**| 58,321 | 100s | `0.9864 +/- 0.0003` | `5.7063 +/- 0.2078` |
-| **BreathPool Avg + Skips**| 58,321 | 99s | `0.9839 +/- 0.0009` | `6.7361 +/- 0.5004` |
-| **PurePool Max + Skips** | **49,025** *(-73.7%)* | 83s | **`0.9862 +/- 0.0012`** | `5.7772 +/- 0.4630` |
-| **PurePool Avg + Skips** | **49,025** *(-73.7%)* | **77s** *(-27.4%)* | `0.9837 +/- 0.0012` | `6.8342 +/- 0.5173` |
+| 🏆 **BreathPool Max + Skips** | **49,025** *(-73.7%)* | 83s | **`0.9862 +/- 0.0012`** | `5.7772 +/- 0.4630` |
+| **BreathPool Avg + Skips** | **49,025** *(-73.7%)* | **77s** *(-27.4%)* | `0.9837 +/- 0.0012` | `6.8342 +/- 0.5173` |
 
 #### B. Regression (California Housing)
 * **Test Objective (Tabular Regression / Demographic Domain):** Predict median house values from 8 demographic features. Evaluates bottleneck capability on narrow inputs.
@@ -338,10 +333,8 @@ All models were evaluated under identical conditions (ReLU, No Norm, Adam/AdamW,
 | :--- | :---: | :---: | :---: | :---: |
 | **Deep Standard** | 179,713 | 53s | `0.8030 +/- 0.0050` | `0.2624 +/- 0.0110` |
 | **Breath + Skips (Lin)** | 134,817 | 67s | `0.8019 +/- 0.0103` | `0.2636 +/- 0.0113` |
-| **BreathPool Max + Skips**| 51,665 | 61s | `0.7872 +/- 0.0045` | `0.2833 +/- 0.0070` |
-| **BreathPool Avg + Skips**| 51,665 | 59s | `0.7905 +/- 0.0029` | `0.2789 +/- 0.0038` |
-| **PurePool Max + Skips** | **42,369** *(-76.4%)* | 56s | `0.7874 +/- 0.0069` | `0.2831 +/- 0.0112` |
-| 🏆 **PurePool Avg + Skips**  | **42,369** *(-76.4%)* | **50s** *(-25.4%)* | **`0.7924 +/- 0.0112`** | **`0.2763 +/- 0.0140`** |
+| **BreathPool Max + Skips** | **42,369** *(-76.4%)* | 56s | `0.7874 +/- 0.0069` | `0.2831 +/- 0.0112` |
+| 🏆 **BreathPool Avg + Skips**  | **42,369** *(-76.4%)* | **50s** *(-25.4%)* | **`0.7924 +/- 0.0112`** | **`0.2763 +/- 0.0140`** |
 
 #### C. Image Classification (MNIST Dataset)
 * **Test Objective (Image Classification / Computer Vision Domain):** Classify hand-written digits (10 classes) from 784 flattened pixel inputs.
@@ -350,27 +343,24 @@ All models were evaluated under identical conditions (ReLU, No Norm, Adam/AdamW,
 | :--- | :---: | :---: | :---: |
 | **Deep Standard** | 1,503,898 | 49s | `97.74% +/- 0.06%` |
 | **Breath + Skips (Lin)** | 1,325,274 | 66s | `97.28% +/- 0.35%` |
-| **BreathPool Max + Skips**| 992,042 | 62s | **`97.66% +/- 0.25%`** |
-| **BreathPool Avg + Skips**| 992,042 | 58s | `97.47% +/- 0.20%` |
-| 🏆 **PurePool Max + Skips**  | **954,490** *(-36.5%)* | 55s | **`97.65% +/- 0.16%`** |
-| **PurePool Avg + Skips**  | **954,490** *(-36.5%)* | **49s** *(-25.7%)* | `97.56% +/- 0.17%` |
+| 🏆 **BreathPool Max + Skips**  | **954,490** *(-36.5%)* | 55s | **`97.65% +/- 0.16%`** |
+| **BreathPool Avg + Skips**  | **954,490** *(-36.5%)* | **49s** *(-25.7%)* | `97.56% +/- 0.17%` |
 
 ---
 
 ### 🧠 Key Insights & Takeaways
 
 1. **Massive Parameter Reductions with Tiny Performance Cost:**
-   By removing learnable parameters from compression and skip paths, `PurePool` variants reduce the parameter footprint of the Breath architecture by **up to 76.4%** compared to the Deep Standard baseline, and **up to 68.6%** compared to standard Breath. The performance impact is minimal (often less than a 0.002 to 0.01 difference in $R^2$ / Accuracy).
+   By removing learnable parameters from compression and skip paths, **`BreathPool`** variants reduce the parameter footprint of the Breath architecture by **up to 76.4%** compared to the Deep Standard baseline, and **up to 68.6%** compared to standard Breath. The performance impact is minimal (often less than a 0.002 to 0.01 difference in $R^2$ / Accuracy).
 
 2. **Significant Training Speedups:**
-   `PurePool Avg` reduces the training time per fold by **25% to 27%** compared to `Breath + Skips (Lin)` (e.g., from 106s to 77s on SARCOS, and 66s to 49s on MNIST). Average pooling is computationally extremely cheap and does not require tracking gradient routing indices (like Max pooling does), making it run faster on GPUs.
+   `BreathPool Avg` reduces the training time per fold by **25% to 27%** compared to `Breath + Skips (Lin)` (e.g., from 106s to 77s on SARCOS, and 66s to 49s on MNIST). Average pooling is computationally extremely cheap and does not require tracking gradient routing indices (like Max pooling does), making it run faster on GPUs.
 
 3. **Average Pooling vs. Max Pooling trade-off:**
-   * **On Tabular/Regression data (SARCOS, California):** `PurePool Avg` performs best among the pooling variants because it provides a continuous, dense gradient backpropagation path to *all* neurons, preventing gradient bottlenecking.
-   * **On Vision/Classification data (MNIST):** `PurePool Max` performs best, outperforming linear Breath by a large margin (`97.65%` vs `97.28%`). This suggests that max-pooling behaves as an effective spatial-frequency local feature selector, extracting high-amplitude features (reminiscent of CNN pooling), which fits image inputs exceptionally well.
+   * **On Tabular/Regression data (SARCOS, California):** `BreathPool Avg` performs best among the pooling variants because it provides a continuous, dense gradient backpropagation path to *all* neurons, preventing gradient bottlenecking.
+   * **On Vision/Classification data (MNIST):** `BreathPool Max` performs best, outperforming linear Breath by a large margin (`97.65%` vs `97.28%`). This suggests that max-pooling behaves as an effective spatial-frequency local feature selector, extracting high-amplitude features (reminiscent of CNN pooling), which fits image inputs exceptionally well.
 
 ---
 
 ## 📜 References
 * Chen, M.-H., et al. (2025). *"Rethinking the shape convention of an MLP"*. arXiv preprint.
-
