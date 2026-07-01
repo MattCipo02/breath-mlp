@@ -17,7 +17,7 @@ import urllib.request
 from scipy.io import loadmat
 from sklearn.datasets import fetch_california_housing
 from sklearn.model_selection import KFold
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_squared_error
 from torch.utils.data import TensorDataset, DataLoader
 
@@ -43,7 +43,7 @@ parser.add_argument("--lr",             type=float, default=0.001)
 parser.add_argument("--compression",    type=float, default=0.25)
 parser.add_argument("--expansion",      type=float, default=2.0)
 parser.add_argument("--decay",          type=float, default=0.5)
-parser.add_argument("--activation",     type=str,   default="relu", choices=["relu", "gelu", "silu"])
+parser.add_argument("--activation",     type=str,   default="relu", choices=["relu", "gelu", "silu", "tanh", "elu", "leaky_relu"])
 parser.add_argument("--use_norm",       action="store_true", help="Use LayerNorm inside networks")
 args = parser.parse_args()
 
@@ -77,9 +77,9 @@ if args.dataset == "sarcos":
     y_all = full_data[:, 21 ].astype("float32")
     
     breath_layers = generate_breath_architecture(
-        args.start_width, args.compression, args.expansion, min_width=16
+        args.start_width, args.compression, args.expansion, min_width=32, output_dim=output_dim
     )
-    deep_layers = generate_deep_architecture(args.start_width, args.decay, min_width=16)
+    deep_layers = generate_deep_architecture(args.start_width, args.decay, min_width=32)
 
 elif args.dataset == "california":
     housing = fetch_california_housing()
@@ -87,7 +87,7 @@ elif args.dataset == "california":
     y_all   = housing.target.astype("float32")
     
     breath_layers = generate_breath_architecture(
-        args.start_width, args.compression, args.expansion, min_width=16
+        args.start_width, args.compression, args.expansion, min_width=16, output_dim=output_dim
     )
     deep_layers = generate_deep_architecture(args.start_width, args.decay, min_width=16)
 
@@ -99,7 +99,6 @@ elif args.dataset == "mnist":
     is_regression = False
     output_dim = 10
     
-    # Use wider hidden layers for MNIST as in main benchmark
     breath_layers = generate_breath_architecture(
         args.start_width * 2, args.compression, args.expansion, min_width=10, output_dim=10
     )
@@ -138,15 +137,29 @@ def make_model(config):
             output_dim=output_dim, use_skips=config["use_skips"],
             pool_type="avg", activation=args.activation, use_norm=args.use_norm
         )
+    elif config["type"] == "breath_pool_hybrid":
+        return BreathMLPPool(
+            input_dim=input_dim, hidden_layers=config["layers"],
+            output_dim=output_dim, use_skips=config["use_skips"],
+            pool_type="hybrid", activation=args.activation, use_norm=args.use_norm
+        )
 
 def count_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def print_hybrid_weights(model):
+    weights = {}
+    for name, module in model.named_modules():
+        if hasattr(module, "pool_type") and module.pool_type == "hybrid" and hasattr(module, "alpha"):
+            weights[name] = torch.sigmoid(module.alpha).item()
+    return weights
 
 configs = [
     {"name": "Deep Standard",         "type": "deep",             "layers": deep_layers,   "use_skips": False},
     {"name": "Breath + Skips (Lin)",  "type": "breath_linear",    "layers": breath_layers, "use_skips": True},
     {"name": "BreathPool Max + Skips","type": "breath_pool_max",   "layers": breath_layers, "use_skips": True},
     {"name": "BreathPool Avg + Skips","type": "breath_pool_avg",   "layers": breath_layers, "use_skips": True},
+    {"name": "BreathPool Hybrid + Skips","type": "breath_pool_hybrid","layers": breath_layers, "use_skips": True},
 ]
 
 # ======================================================================
@@ -157,12 +170,12 @@ def train_and_eval(model, X_tr_np, y_tr_np, X_va_np, y_va_np):
         X_tr_s = X_tr_np
         X_va_s = X_va_np
     else:
-        scaler_X = StandardScaler()
+        scaler_X = MinMaxScaler()
         X_tr_s = scaler_X.fit_transform(X_tr_np)
         X_va_s = scaler_X.transform(X_va_np)
 
     if is_regression:
-        scaler_y = StandardScaler()
+        scaler_y = MinMaxScaler()
         y_tr_s = scaler_y.fit_transform(y_tr_np.reshape(-1, 1)).ravel()
         y_tr_t = torch.tensor(y_tr_s, dtype=torch.float32).unsqueeze(1)
         criterion = nn.MSELoss()
@@ -212,6 +225,7 @@ def train_and_eval(model, X_tr_np, y_tr_np, X_va_np, y_va_np):
 # ======================================================================
 kf = KFold(n_splits=args.folds, shuffle=True, random_state=42)
 fold_results = {c["name"]: [] for c in configs}
+hybrid_weights_by_fold = []
 
 for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_all)):
     print(f"\n{'='*80}")
@@ -233,6 +247,12 @@ for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_all)):
         fold_results[config["name"]].append(m)
         key = "R2" if is_regression else "Accuracy"
         print(f"{key}={m[key]:.4f}  t={m['Time']:.0f}s")
+        
+        if config["type"] == "breath_pool_hybrid":
+            hw = print_hybrid_weights(model)
+            hybrid_weights_by_fold.append(hw)
+            w_str = ", ".join([f"{k}: {v*100:.1f}% Max" for k, v in hw.items()])
+            print(f"    [Pesi Ibridi: {w_str}]")
 
 # ======================================================================
 # AGGREGATE & REPORT
@@ -280,3 +300,16 @@ out_file = f"pool_results_{args.dataset}_{args.folds}fold.csv"
 df.to_csv(out_file, index=False)
 print(f"\nSaved results to: {out_file}")
 print("="*80)
+
+if hybrid_weights_by_fold:
+    print("\n" + "="*80)
+    print("  PESI DEL POOLING IBRIDO APPRESI (MEDIA SU TUTTI I FOLD)")
+    print("="*80)
+    keys = list(hybrid_weights_by_fold[0].keys())
+    for k in keys:
+        vals = [f[k] for f in hybrid_weights_by_fold if k in f]
+        mean_val = float(np.mean(vals))
+        std_val = float(np.std(vals))
+        print(f"  {k:25s} | Sigmoid(Alpha) = {mean_val*100:6.2f}% Max Pool ({100 - mean_val*100:6.2f}% Avg Pool)")
+    print("="*80)
+

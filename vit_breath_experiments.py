@@ -11,7 +11,7 @@ from tensorflow.keras.datasets import cifar10
 from torch.utils.data import TensorDataset, DataLoader
 
 # Import custom Breath MLP
-from breath_mlp import generate_breath_architecture, BreathMLP
+from breath_mlp import generate_breath_architecture, BreathMLP, BreathMLPPool
 
 # Configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,13 +88,13 @@ class StandardFFN(nn.Module):
 class BreathFFN(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        # Strict decaying Breath FFN: [1536, 384, 768, 192, 384] (~1.55M parameters)
-        # Follows rules: compression 0.25 (1/4), expansion 2.0, min_width = d_model=192
+        # Strict Breath FFN: intermediate layers strictly > d_model
         hidden_layers = generate_breath_architecture(
             start_width=8 * d_model,
             compression_factor=0.25,
             expansion_factor=2.0,
-            min_width=d_model
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
         )
         self.net = BreathMLP(
             input_dim=d_model,
@@ -110,13 +110,99 @@ class BreathFFN(nn.Module):
         out_flat = self.net(x_flat)
         return out_flat.view(B, T, C)
 
+class BreathPoolMaxFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=8 * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="max",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
+class BreathPoolAvgFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=8 * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="avg",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
+class BreathPoolHybridFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=8 * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="hybrid",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
 class ViTBlock(nn.Module):
     def __init__(self, d_model, n_head, ffn_type):
         super().__init__()
         self.ln_1 = nn.LayerNorm(d_model)
         self.attn = BidirectionalSelfAttention(d_model, n_head)
         self.ln_2 = nn.LayerNorm(d_model)
-        self.ffn = StandardFFN(d_model) if ffn_type == "standard" else BreathFFN(d_model)
+        if ffn_type == "standard":
+            self.ffn = StandardFFN(d_model)
+        elif ffn_type == "breath":
+            self.ffn = BreathFFN(d_model)
+        elif ffn_type == "breath_pool_max":
+            self.ffn = BreathPoolMaxFFN(d_model)
+        elif ffn_type == "breath_pool_avg":
+            self.ffn = BreathPoolAvgFFN(d_model)
+        elif ffn_type == "breath_pool_hybrid":
+            self.ffn = BreathPoolHybridFFN(d_model)
+        else:
+            raise ValueError(f"Unknown ffn_type: {ffn_type}")
         
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -147,7 +233,6 @@ class SimpleViT(nn.Module):
     def forward(self, img):
         B, C, H, W = img.size()
         # Rearrange image into patches and flatten them: (B, num_patches, patch_dim)
-        # H and W are 32. patch_size is 4. Grid is 8x8.
         p = self.patch_size
         x = img.unfold(2, p, p).unfold(3, p, p) # (B, C, H/p, W/p, p, p)
         x = x.permute(0, 2, 3, 1, 4, 5).contiguous() # (B, H/p, W/p, C, p, p)
@@ -237,43 +322,59 @@ def train_vit(ffn_type, seed):
     
     return trainable_params, elapsed, accuracy
 
-# Run multi-seed validation
-SEEDS = [42, 137, 2026]
-results_raw = []
+if __name__ == '__main__':
+    # Run multi-seed validation
+    SEEDS = [42, 137, 2026]
+    results_raw = []
 
-for seed in SEEDS:
-    # Run Standard
-    p_std, t_std, acc_std = train_vit("standard", seed)
-    results_raw.append({"Config": "Standard", "Seed": seed, "Params": p_std, "Time": t_std, "Accuracy": acc_std})
-    
-    # Run Breath
-    p_br, t_br, acc_br = train_vit("breath", seed)
-    results_raw.append({"Config": "Breath", "Seed": seed, "Params": p_br, "Time": t_br, "Accuracy": acc_br})
+    for seed in SEEDS:
+        # Run Standard
+        p_std, t_std, acc_std = train_vit("standard", seed)
+        results_raw.append({"Config": "Standard", "Seed": seed, "Params": p_std, "Time": t_std, "Accuracy": acc_std})
+        
+        # Run Breath
+        p_br, t_br, acc_br = train_vit("breath", seed)
+        results_raw.append({"Config": "Breath", "Seed": seed, "Params": p_br, "Time": t_br, "Accuracy": acc_br})
 
-df_raw = pd.DataFrame(results_raw)
-df_raw.to_csv("vit_raw_multi_seed_results.csv", index=False)
+        # Run BreathPool Max
+        p_pool_max, t_pool_max, acc_pool_max = train_vit("breath_pool_max", seed)
+        results_raw.append({"Config": "BreathPool Max", "Seed": seed, "Params": p_pool_max, "Time": t_pool_max, "Accuracy": acc_pool_max})
 
-# Compute aggregates
-summary = []
-for config in ["Standard", "Breath"]:
-    sub = df_raw[df_raw["Config"] == config]
-    summary.append({
-        "Config": config,
-        "Params": sub["Params"].iloc[0],
-        "Time_mean": sub["Time"].mean(),
-        "Time_std": sub["Time"].std(),
-        "Accuracy_mean": sub["Accuracy"].mean(),
-        "Accuracy_std": sub["Accuracy"].std()
-    })
-df_sum = pd.DataFrame(summary)
-df_sum.to_csv("vit_results.csv", index=False)
+        # Run BreathPool Avg
+        p_pool_avg, t_pool_avg, acc_pool_avg = train_vit("breath_pool_avg", seed)
+        results_raw.append({"Config": "BreathPool Avg", "Seed": seed, "Params": p_pool_avg, "Time": t_pool_avg, "Accuracy": acc_pool_avg})
 
-# Final Comparison Report
-print("\n" + "="*90)
-print("             REPORT COMPARATIVO MULTI-SEED VISION TRANSFORMER (CIFAR-10)")
-print("="*90)
-print(f"Configurazione FFN        | Parametri | Tempo (medio) | Accuracy Media (5 epoche)")
-print(f"--------------------------|-----------|---------------|--------------------------")
-for row in summary:
-    print(f"{row['Config']:26s} | {row['Params']:9,} | {row['Time_mean']:11.1f}s | {row['Accuracy_mean']:.4f} +/- {row['Accuracy_std']:.4f}")
-print("="*90)
+        # Run BreathPool Hybrid
+        p_pool_hyb, t_pool_hyb, acc_pool_hyb = train_vit("breath_pool_hybrid", seed)
+        results_raw.append({"Config": "BreathPool Hybrid", "Seed": seed, "Params": p_pool_hyb, "Time": t_pool_hyb, "Accuracy": acc_pool_hyb})
+
+    df_raw = pd.DataFrame(results_raw)
+    df_raw.to_csv("vit_raw_multi_seed_results.csv", index=False)
+
+    # Compute aggregates
+    summary = []
+    for config in ["Standard", "Breath", "BreathPool Max", "BreathPool Avg", "BreathPool Hybrid"]:
+        sub = df_raw[df_raw["Config"] == config]
+        if len(sub) == 0:
+            continue
+        summary.append({
+            "Config": config,
+            "Params": sub["Params"].iloc[0],
+            "Time_mean": sub["Time"].mean(),
+            "Time_std": sub["Time"].std(),
+            "Accuracy_mean": sub["Accuracy"].mean(),
+            "Accuracy_std": sub["Accuracy"].std()
+        })
+    df_sum = pd.DataFrame(summary)
+    df_sum.to_csv("vit_results.csv", index=False)
+
+    # Final Comparison Report
+    print("\n" + "="*90)
+    print("             REPORT COMPARATIVO MULTI-SEED VISION TRANSFORMER (CIFAR-10)")
+    print("="*90)
+    print(f"Configurazione FFN        | Parametri | Tempo (medio) | Accuracy Media (5 epoche)")
+    print(f"--------------------------|-----------|---------------|--------------------------")
+    for row in summary:
+        print(f"{row['Config']:26s} | {row['Params']:9,} | {row['Time_mean']:11.1f}s | {row['Accuracy_mean']:.4f} +/- {row['Accuracy_std']:.4f}")
+    print("="*90)
+

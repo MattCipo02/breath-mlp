@@ -6,12 +6,16 @@ import torch.nn as nn
 # =====================================================================
 def generate_breath_architecture(start_width, compression_factor=0.25, expansion_factor=2.0, min_width=16, output_dim=None):
     """
-    Generates a decaying-oscillating (Breath) hidden layer size sequence.
-    Example: 512, 0.25, 2.0 -> [512, 128, 256, 32, 64]
+    Generates an oscillating (Breath) hidden layer size sequence strictly using
+    the provided compression and expansion factors.
+
+    All intermediate layers are guaranteed to be STRICTLY GREATER than output_dim.
+    This ensures the output_layer is always a meaningful compression, never a
+    square (identity-like) projection.
     """
-    # Core Rule: The minimum hidden layer width should not be smaller than the output dimension
+    limit = min_width
     if output_dim is not None:
-        min_width = max(min_width, output_dim)
+        limit = max(limit, output_dim)
         
     layers_list = [start_width]
     current = start_width
@@ -19,19 +23,18 @@ def generate_breath_architecture(start_width, compression_factor=0.25, expansion
     while True:
         # 1. Compress
         compressed = int(current * compression_factor)
-        if compressed < min_width:
+        if compressed < limit:
+            break
+        # All intermediate layers must be STRICTLY greater than output_dim.
+        # If compressed == output_dim, the output_layer itself will handle
+        # that final mapping — no need for a redundant bottleneck at output_dim.
+        if output_dim is not None and compressed <= output_dim:
             break
         layers_list.append(compressed)
         
-        # 2. Expand with decay constraint
+        # 2. Expand
         expanded = int(compressed * expansion_factor)
-        if len(layers_list) >= 3:
-            previous_expanded = layers_list[-3]
-            # Ensure the new expansion is smaller than the previous one to maintain decay
-            if expanded >= previous_expanded:
-                expanded = int(previous_expanded * 0.5)
-        
-        if expanded < min_width:
+        if expanded < limit:
             break
         layers_list.append(expanded)
         current = expanded
@@ -73,6 +76,12 @@ class BreathMLP(nn.Module):
             self.act = nn.GELU()
         elif activation == "silu":
             self.act = nn.SiLU()
+        elif activation == "tanh":
+            self.act = nn.Tanh()
+        elif activation == "elu":
+            self.act = nn.ELU()
+        elif activation == "leaky_relu":
+            self.act = nn.LeakyReLU(negative_slope=0.1)
         else:
             self.act = nn.ReLU()
             
@@ -175,6 +184,12 @@ class DeepMLP(nn.Module):
             self.act = nn.GELU()
         elif activation == "silu":
             self.act = nn.SiLU()
+        elif activation == "tanh":
+            self.act = nn.Tanh()
+        elif activation == "elu":
+            self.act = nn.ELU()
+        elif activation == "leaky_relu":
+            self.act = nn.LeakyReLU(negative_slope=0.1)
         else:
             self.act = nn.ReLU()
             
@@ -268,11 +283,14 @@ class FeaturePooling(nn.Module):
 class BreathMLPPool(nn.Module):
     """
     100% Parameter-Free Compression and Skip connections (BreathMLPPool).
-    Uses AdaptiveAvgPool1d (or MaxPool) for both main compression AND skip resizing.
-    Contains zero linear projection weights in the compression or skip paths.
+    Uses AdaptivePool1d (Max, Avg, or learnable Hybrid) for ALL compression steps:
+      - Main path compressions
+      - Skip connection resizing between bottlenecks
+      - Final output compression (output_layer)
+    Only the input projection and expansion layers contain learnable weights.
     """
     def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True, 
-                 pool_type="avg", activation="relu", use_norm=False):
+                 pool_type="avg", activation="relu", use_norm=False, pool_output=True):
         super().__init__()
         self.hidden_layers = hidden_layers
         self.use_skips = use_skips
@@ -289,6 +307,12 @@ class BreathMLPPool(nn.Module):
             self.act = nn.GELU()
         elif activation == "silu":
             self.act = nn.SiLU()
+        elif activation == "tanh":
+            self.act = nn.Tanh()
+        elif activation == "elu":
+            self.act = nn.ELU()
+        elif activation == "leaky_relu":
+            self.act = nn.LeakyReLU(negative_slope=0.1)
         else:
             self.act = nn.ReLU()
             
@@ -326,7 +350,12 @@ class BreathMLPPool(nn.Module):
             else:
                 i += 1
                 
-        self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
+        # Output layer: use parameter-free pooling if pool_output is True,
+        # otherwise use a standard Linear projection layer (essential for mapping features to label/target space).
+        if pool_output:
+            self.output_layer = FeaturePooling(output_dim, pool_type=pool_type)
+        else:
+            self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
         
     def forward(self, x):
         # 1. Normalize input if enabled

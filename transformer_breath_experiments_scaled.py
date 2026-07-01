@@ -8,9 +8,10 @@ import os
 import urllib.request
 import sys
 import pandas as pd
+import argparse
 
 # Import custom Breath MLP
-from breath_mlp import generate_breath_architecture, BreathMLP
+from breath_mlp import generate_breath_architecture, BreathMLP, BreathMLPPool
 
 # Configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -20,16 +21,38 @@ if device.type == "cuda":
     print(f" -> GPU: {torch.cuda.get_device_name(0)}")
 print("="*60)
 
+# Command-line Arguments
+parser = argparse.ArgumentParser()
+parser.add_argument("--max_iters", type=int, default=1000)
+parser.add_argument("--seeds", type=int, nargs="+", default=[42, 137, 2026])
+parser.add_argument("--ffn_start_mult", type=int, default=8,
+                    help="Multiplier for BreathFFN start_width relative to d_model."
+                         " Use 4 for canonical 4x comparison, 8 for deep parameter-matched config.")
+args_cli = parser.parse_args()
+
 # Hyperparameters (SCALED UP)
 batch_size = 64
 block_size = 128
-max_iters = 1000  # Reduced to 1000 for fast multi-seed evaluation
+max_iters = args_cli.max_iters
 eval_interval = 250
 learning_rate = 1e-3
 eval_iters = 50
 d_model = 256
 n_head = 8
 n_layer = 6
+FFN_START_MULT = args_cli.ffn_start_mult
+
+# Auto-compute parameter-matched StandardFFN multiplier:
+# Standard FFN uses STD_MULT * d_model intermediate width, chosen so that
+# its total FFN params ≈ BreathMLP at the given FFN_START_MULT.
+_tmp_hidden = generate_breath_architecture(
+    FFN_START_MULT * d_model, 0.25, 2.0, min_width=d_model, output_dim=d_model
+)
+_tmp_breath = BreathMLP(d_model, _tmp_hidden, d_model, use_skips=True, activation="gelu", use_norm=True)
+_breath_ffn_params = sum(p.numel() for p in _tmp_breath.parameters())
+STD_MULT = max(4, round(_breath_ffn_params / (2 * d_model * d_model)))
+del _tmp_breath, _tmp_hidden
+print(f"[Config] FFN start_mult={FFN_START_MULT}x | BreathMLP FFN/block~{_breath_ffn_params:,} | StandardFFN will use {STD_MULT}x d_model")
 
 # Load Tiny Shakespeare
 dataset_url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -110,11 +133,11 @@ class CausalSelfAttention(nn.Module):
 class StandardFFN(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        # Parameter-matched standard FFN to strict Breath FFN: 19 * d_model = 4864 intermediate width (~2.5M parameters)
+        # Parameter-matched to BreathMLP at FFN_START_MULT (auto-computed STD_MULT)
         self.net = nn.Sequential(
-            nn.Linear(d_model, 19 * d_model),
+            nn.Linear(d_model, STD_MULT * d_model),
             nn.GELU(),
-            nn.Linear(19 * d_model, d_model)
+            nn.Linear(STD_MULT * d_model, d_model)
         )
     def forward(self, x):
         return self.net(x)
@@ -122,13 +145,12 @@ class StandardFFN(nn.Module):
 class BreathFFN(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        # Strict decaying Breath FFN: [2048, 512, 1024, 256, 512] (~2.5M parameters)
-        # Follows rules: compression 0.25 (1/4), expansion 2.0, min_width = d_model=256
         hidden_layers = generate_breath_architecture(
-            start_width=8 * d_model,
+            start_width=FFN_START_MULT * d_model,
             compression_factor=0.25,
             expansion_factor=2.0,
-            min_width=d_model
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
         )
         self.net = BreathMLP(
             input_dim=d_model,
@@ -144,13 +166,99 @@ class BreathFFN(nn.Module):
         out_flat = self.net(x_flat)
         return out_flat.view(B, T, C)
 
+class BreathPoolMaxFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=FFN_START_MULT * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="max",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
+class BreathPoolAvgFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=FFN_START_MULT * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="avg",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
+class BreathPoolHybridFFN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        hidden_layers = generate_breath_architecture(
+            start_width=FFN_START_MULT * d_model,
+            compression_factor=0.25,
+            expansion_factor=2.0,
+            min_width=d_model,
+            output_dim=d_model  # intermediate layers strictly > d_model
+        )
+        self.net = BreathMLPPool(
+            input_dim=d_model,
+            hidden_layers=hidden_layers,
+            output_dim=d_model,
+            use_skips=True,
+            pool_type="hybrid",
+            activation="gelu",
+            use_norm=True
+        )
+    def forward(self, x):
+        B, T, C = x.size()
+        x_flat = x.view(B * T, C)
+        out_flat = self.net(x_flat)
+        return out_flat.view(B, T, C)
+
 class Block(nn.Module):
     def __init__(self, d_model, n_head, block_size, ffn_type):
         super().__init__()
         self.ln_1 = nn.LayerNorm(d_model)
         self.attn = CausalSelfAttention(d_model, n_head, block_size)
         self.ln_2 = nn.LayerNorm(d_model)
-        self.ffn = StandardFFN(d_model) if ffn_type == "standard" else BreathFFN(d_model)
+        if ffn_type == "standard":
+            self.ffn = StandardFFN(d_model)
+        elif ffn_type == "breath":
+            self.ffn = BreathFFN(d_model)
+        elif ffn_type == "breath_pool_max":
+            self.ffn = BreathPoolMaxFFN(d_model)
+        elif ffn_type == "breath_pool_avg":
+            self.ffn = BreathPoolAvgFFN(d_model)
+        elif ffn_type == "breath_pool_hybrid":
+            self.ffn = BreathPoolHybridFFN(d_model)
+        else:
+            raise ValueError(f"Unknown ffn_type: {ffn_type}")
         
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -249,55 +357,90 @@ def train_gpt(ffn_type, seed):
     
     return trainable_params, elapsed, losses[-1][2], generated_text
 
-# Run multi-seed validation
-SEEDS = [42, 137, 2026]
-results_raw = []
-last_text_std = ""
-last_text_br = ""
+if __name__ == '__main__':
+    # Run multi-seed validation
+    SEEDS = args_cli.seeds
+    results_raw = []
+    last_text_std = ""
+    last_text_br = ""
+    last_text_pool_max = ""
+    last_text_pool_avg = ""
+    last_text_pool_hyb = ""
 
-for seed in SEEDS:
-    # Run Standard
-    p_std, t_std, loss_std, text_std = train_gpt("standard", seed)
-    results_raw.append({"Config": "Standard", "Seed": seed, "Params": p_std, "Time": t_std, "Val_Loss": loss_std})
-    last_text_std = text_std
-    
-    # Run Breath
-    p_br, t_br, loss_br, text_br = train_gpt("breath", seed)
-    results_raw.append({"Config": "Breath", "Seed": seed, "Params": p_br, "Time": t_br, "Val_Loss": loss_br})
-    last_text_br = text_br
+    for seed in SEEDS:
+        # Run Standard
+        p_std, t_std, loss_std, text_std = train_gpt("standard", seed)
+        results_raw.append({"Config": "Standard", "Seed": seed, "Params": p_std, "Time": t_std, "Val_Loss": loss_std})
+        last_text_std = text_std
+        
+        # Run Breath
+        p_br, t_br, loss_br, text_br = train_gpt("breath", seed)
+        results_raw.append({"Config": "Breath", "Seed": seed, "Params": p_br, "Time": t_br, "Val_Loss": loss_br})
+        last_text_br = text_br
 
-df_raw = pd.DataFrame(results_raw)
-df_raw.to_csv("transformer_scaled_raw_multi_seed_results.csv", index=False)
+        # Run BreathPool Max
+        p_pool_max, t_pool_max, loss_pool_max, text_pool_max = train_gpt("breath_pool_max", seed)
+        results_raw.append({"Config": "BreathPool Max", "Seed": seed, "Params": p_pool_max, "Time": t_pool_max, "Val_Loss": loss_pool_max})
+        last_text_pool_max = text_pool_max
 
-# Compute aggregates
-summary = []
-for config in ["Standard", "Breath"]:
-    sub = df_raw[df_raw["Config"] == config]
-    summary.append({
-        "Config": config,
-        "Params": sub["Params"].iloc[0],
-        "Time_mean": sub["Time"].mean(),
-        "Time_std": sub["Time"].std(),
-        "Val_Loss_mean": sub["Val_Loss"].mean(),
-        "Val_Loss_std": sub["Val_Loss"].std()
-    })
-df_sum = pd.DataFrame(summary)
-df_sum.to_csv("transformer_scaled_results.csv", index=False)
+        # Run BreathPool Avg
+        p_pool_avg, t_pool_avg, loss_pool_avg, text_pool_avg = train_gpt("breath_pool_avg", seed)
+        results_raw.append({"Config": "BreathPool Avg", "Seed": seed, "Params": p_pool_avg, "Time": t_pool_avg, "Val_Loss": loss_pool_avg})
+        last_text_pool_avg = text_pool_avg
 
-# Final Comparison Report
-print("\n" + "="*90)
-print("             REPORT COMPARATIVO MULTI-SEED NANO-GPT SCALATO")
-print("="*90)
-print(f"Configurazione FFN        | Parametri | Tempo (medio) | Val Loss Media ({max_iters} iter)")
-print(f"--------------------------|-----------|---------------|--------------------------")
-for row in summary:
-    print(f"{row['Config']:26s} | {row['Params']:9,} | {row['Time_mean']:11.1f}s | {row['Val_Loss_mean']:.4f} +/- {row['Val_Loss_std']:.4f}")
-print("="*90)
+        # Run BreathPool Hybrid
+        p_pool_hyb, t_pool_hyb, loss_pool_hyb, text_pool_hyb = train_gpt("breath_pool_hybrid", seed)
+        results_raw.append({"Config": "BreathPool Hybrid", "Seed": seed, "Params": p_pool_hyb, "Time": t_pool_hyb, "Val_Loss": loss_pool_hyb})
+        last_text_pool_hyb = text_pool_hyb
 
-print("\n" + "-"*35 + " TESTO GENERATO DA GPT STANDARD (SEED 2026) " + "-"*35)
-print(last_text_std)
-print("-"*100)
+    df_raw = pd.DataFrame(results_raw)
+    df_raw.to_csv("transformer_scaled_raw_multi_seed_results.csv", index=False)
 
-print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATH (SEED 2026) " + "-"*35)
-print(last_text_br)
-print("-"*100)
+    # Compute aggregates
+    summary = []
+    for config in ["Standard", "Breath", "BreathPool Max", "BreathPool Avg", "BreathPool Hybrid"]:
+        sub = df_raw[df_raw["Config"] == config]
+        if len(sub) == 0:
+            continue
+        summary.append({
+            "Config": config,
+            "Params": sub["Params"].iloc[0],
+            "Time_mean": sub["Time"].mean(),
+            "Time_std": sub["Time"].std(),
+            "Val_Loss_mean": sub["Val_Loss"].mean(),
+            "Val_Loss_std": sub["Val_Loss"].std()
+        })
+    df_sum = pd.DataFrame(summary)
+    df_sum.to_csv(f"transformer_{FFN_START_MULT}x_results.csv", index=False)
+
+    # Final Comparison Report
+    print("\n" + "="*90)
+    print(f"     REPORT COMPARATIVO MULTI-SEED NANO-GPT | FFN_START={FFN_START_MULT}x d_model | STD={STD_MULT}x d_model")
+    print("="*90)
+    print(f"Configurazione FFN        | Parametri | Tempo (medio) | Val Loss Media ({max_iters} iter)")
+    print(f"--------------------------|-----------|---------------|--------------------------")
+    for row in summary:
+        print(f"{row['Config']:26s} | {row['Params']:9,} | {row['Time_mean']:11.1f}s | {row['Val_Loss_mean']:.4f} +/- {row['Val_Loss_std']:.4f}")
+    print("="*90)
+
+    print("\n" + "-"*35 + " TESTO GENERATO DA GPT STANDARD (SEED 2026) " + "-"*35)
+    print(last_text_std)
+    print("-"*100)
+
+    print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATH (SEED 2026) " + "-"*35)
+    print(last_text_br)
+    print("-"*100)
+
+    print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATHPOOL MAX (SEED 2026) " + "-"*35)
+    print(last_text_pool_max)
+    print("-"*100)
+
+    print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATHPOOL AVG (SEED 2026) " + "-"*35)
+    print(last_text_pool_avg)
+    print("-"*100)
+
+    print("\n" + "-"*35 + " TESTO GENERATO DA GPT BREATHPOOL HYBRID (SEED 2026) " + "-"*35)
+    print(last_text_pool_hyb)
+    print("-"*100)
+
+
