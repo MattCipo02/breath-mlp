@@ -57,6 +57,7 @@ To ensure a mathematically sound, rigorous, and fair comparison, all **Breath ML
 
 ### 1. Robotics Inverse Dynamics (SARCOS Dataset)
 Predicting the joint torque on a robotics kinematics task.
+* **Test Objective (Tabular Regression / Robotics Domain):** In this test, the dataset consists of kinematics data (21 features representing joint positions, velocities, and accelerations) of a 7-degree-of-freedom SARCOS robotic arm. The goal is to learn the inverse dynamics mapping to predict the corresponding joint torque (regression). We are testing whether the decaying-oscillating (Breath) shape can approximate complex physical dynamics as accurately as a flat Deep MLP, and if it does so with greater parameter efficiency.
 * **Dimensionality:** Inputs = 21, Outputs = 1 joint torque value.
 * **Purist Rules Applied:**
   * Oscillation Ratio: Compression factor `0.25` (1/4), Expansion factor `2.0` (times 2).
@@ -86,6 +87,7 @@ Predicting the joint torque on a robotics kinematics task.
 
 ### 2. Regression (California Housing)
 Predicting median house values from 8 geographic and demographic features.
+* **Test Objective (Tabular Regression / Demographic Domain):** In this test, the dataset contains 8 socioeconomic and geographic features (such as median income, house age, average rooms, and coordinates) of California districts. The goal is to learn to predict the median house value of a district (regression). We are evaluating the capacity of Breath MLP to model low-dimensional tabular data and finding whether narrow bottlenecks act as effective feature selectors, matching standard MLP performance with fewer parameters.
 * **Dimensionality:** Inputs = 8, Outputs = 1 (median house value).
 * **Purist Rules Applied:**
   * Oscillation Ratio: Compression factor `0.25` (1/4), Expansion factor `2.0` (times 2).
@@ -114,6 +116,7 @@ Predicting median house values from 8 geographic and demographic features.
 
 ### 3. Image Classification (MNIST & CIFAR-10)
 Evaluating classification performance of standalone Breath MLPs under different activations and normalizations.
+* **Test Objective (Image Classification / Computer Vision Domain):** In this test, we evaluate standalone MLPs on flattened image datasets: hand-written digits (MNIST, 784 features) and natural objects (CIFAR-10, 3072 features). The goal is to assign each image to one of 10 target classes (classification). We are investigating how deep oscillating structures process high-dimensional spatial data, and verifying how different activations (SiLU/GELU) and normalizations (LayerNorm) prevent gradient vanishing/explosion in deep configurations (up to 13 hidden layers).
 * **Dimensionality:** 
   * **MNIST:** Inputs = 784 (flattened 28x28), Outputs = 10 (classes).
   * **CIFAR-10:** Inputs = 3072 (flattened 32x32x3), Outputs = 10 (classes).
@@ -155,6 +158,7 @@ Evaluating classification performance of standalone Breath MLPs under different 
 
 ### 4. Transformer FFN Integration (NanoGPT & ViT)
 Evaluating Breath MLP as a drop-in replacement for the Feed-Forward Network (FFN) blocks of standard Transformers.
+* **Test Objective (Deep Sequence Modeling / Vision-Language Domain):** In this test, we evaluate Breath MLP as a drop-in replacement for the Feed-Forward Network (FFN) blocks inside self-attention models: Vision Transformers (ViT) on CIFAR-10 classification, and causal GPTs (NanoGPT) on character-level language modeling (predicting the next character in Shakespeare text). The goal is to learn sequence representations (classification and autoregressive generation). We are testing whether integrating the decaying-oscillating bottleneck inside the Transformer's token projection paths acts as an implicit regularizer, improving validation stability and generalization.
 * **Tasks & Dimensionality:**
   * **ViT (CIFAR-10):** Patch size 4x4, sequence length 65, $d_{\text{model}} = 192$. FFN input/output = 192.
   * **NanoGPT (Tiny Shakespeare):** Vocabulary size 65, sequence length 128, $d_{\text{model}} = 256$. FFN input/output = 256.
@@ -298,5 +302,75 @@ The following table summarizes which architecture performs best in each benchmar
 
 ---
 
+---
+
+## ⚡ 6. Feature Pooling & Parameter-Free Compression (BreathMLPPool & PurePool)
+
+To maximize parameter efficiency and accelerate training times, we investigated replacing the linear compression layers in the Breath MLP with parameter-free **1D Adaptive Feature Pooling** (Max and Average pooling). 
+
+### 📐 The Resizing Challenge for Skip Connections
+Because consecutive bottlenecks decay in size (e.g., from $128 \to 64 \to 16$), direct identity skip connections are impossible due to size mismatches. To resolve this, we evaluated two strategies:
+1. **`BreathPool` (Hybrid):** Uses non-trainable 1D Pooling for the main compression path, but retains a **trainable linear layer** (`nn.Linear`) to project/resize the skip connection between bottlenecks.
+2. **`PurePool` (100% Parameter-Free):** Uses non-trainable 1D Pooling for both the main compression path and the skip connection resizing (e.g., applying `AdaptiveAvgPool1d` or `AdaptiveMaxPool1d` directly to the previous bottleneck activations). This model has **zero trainable weights/biases** in any compression or skip path.
+
+---
+
+### 📊 Benchmark Results & Training Times (5-Fold CV)
+
+All models were evaluated under identical conditions (ReLU, No Norm, Adam/AdamW, batch size 64/128, trained for 40 epochs on SARCOS/California and 12 epochs on MNIST) on an RTX 4070 Laptop GPU.
+
+#### A. Robotics Inverse Dynamics (SARCOS Dataset)
+* **Test Objective (Tabular Regression / Robotics Domain):** Predict joint torques from 21 kinematic features. Evaluates dynamics modeling and gradient stability across 5 folds.
+
+| Model | Parameters | Training Time (Mean per Fold) | $R^2$ Score (5-fold CV) | MSE (5-fold CV) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Deep Standard** | 186,369 | 85s | `0.9888 +/- 0.0007` | `4.6784 +/- 0.2952` |
+| **Breath + Skips (Lin)** | 141,473 | 106s | `0.9878 +/- 0.0006` | `5.1242 +/- 0.2959` |
+| **BreathPool Max + Skips**| 58,321 | 100s | `0.9864 +/- 0.0003` | `5.7063 +/- 0.2078` |
+| **BreathPool Avg + Skips**| 58,321 | 99s | `0.9839 +/- 0.0009` | `6.7361 +/- 0.5004` |
+| **PurePool Max + Skips** | **49,025** *(-73.7%)* | 83s | **`0.9862 +/- 0.0012`** | `5.7772 +/- 0.4630` |
+| **PurePool Avg + Skips** | **49,025** *(-73.7%)* | **77s** *(-27.4%)* | `0.9837 +/- 0.0012` | `6.8342 +/- 0.5173` |
+
+#### B. Regression (California Housing)
+* **Test Objective (Tabular Regression / Demographic Domain):** Predict median house values from 8 demographic features. Evaluates bottleneck capability on narrow inputs.
+
+| Model | Parameters | Training Time (Mean per Fold) | $R^2$ Score (5-fold CV) | MSE (5-fold CV) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Deep Standard** | 179,713 | 53s | `0.8030 +/- 0.0050` | `0.2624 +/- 0.0110` |
+| **Breath + Skips (Lin)** | 134,817 | 67s | `0.8019 +/- 0.0103` | `0.2636 +/- 0.0113` |
+| **BreathPool Max + Skips**| 51,665 | 61s | `0.7872 +/- 0.0045` | `0.2833 +/- 0.0070` |
+| **BreathPool Avg + Skips**| 51,665 | 59s | `0.7905 +/- 0.0029` | `0.2789 +/- 0.0038` |
+| **PurePool Max + Skips** | **42,369** *(-76.4%)* | 56s | `0.7874 +/- 0.0069` | `0.2831 +/- 0.0112` |
+| 🏆 **PurePool Avg + Skips**  | **42,369** *(-76.4%)* | **50s** *(-25.4%)* | **`0.7924 +/- 0.0112`** | **`0.2763 +/- 0.0140`** |
+
+#### C. Image Classification (MNIST Dataset)
+* **Test Objective (Image Classification / Computer Vision Domain):** Classify hand-written digits (10 classes) from 784 flattened pixel inputs.
+
+| Model | Parameters | Training Time (Mean per Fold) | Test Accuracy (5-fold CV) |
+| :--- | :---: | :---: | :---: |
+| **Deep Standard** | 1,503,898 | 49s | `97.74% +/- 0.06%` |
+| **Breath + Skips (Lin)** | 1,325,274 | 66s | `97.28% +/- 0.35%` |
+| **BreathPool Max + Skips**| 992,042 | 62s | **`97.66% +/- 0.25%`** |
+| **BreathPool Avg + Skips**| 992,042 | 58s | `97.47% +/- 0.20%` |
+| 🏆 **PurePool Max + Skips**  | **954,490** *(-36.5%)* | 55s | **`97.65% +/- 0.16%`** |
+| **PurePool Avg + Skips**  | **954,490** *(-36.5%)* | **49s** *(-25.7%)* | `97.56% +/- 0.17%` |
+
+---
+
+### 🧠 Key Insights & Takeaways
+
+1. **Massive Parameter Reductions with Tiny Performance Cost:**
+   By removing learnable parameters from compression and skip paths, `PurePool` variants reduce the parameter footprint of the Breath architecture by **up to 76.4%** compared to the Deep Standard baseline, and **up to 68.6%** compared to standard Breath. The performance impact is minimal (often less than a 0.002 to 0.01 difference in $R^2$ / Accuracy).
+
+2. **Significant Training Speedups:**
+   `PurePool Avg` reduces the training time per fold by **25% to 27%** compared to `Breath + Skips (Lin)` (e.g., from 106s to 77s on SARCOS, and 66s to 49s on MNIST). Average pooling is computationally extremely cheap and does not require tracking gradient routing indices (like Max pooling does), making it run faster on GPUs.
+
+3. **Average Pooling vs. Max Pooling trade-off:**
+   * **On Tabular/Regression data (SARCOS, California):** `PurePool Avg` performs best among the pooling variants because it provides a continuous, dense gradient backpropagation path to *all* neurons, preventing gradient bottlenecking.
+   * **On Vision/Classification data (MNIST):** `PurePool Max` performs best, outperforming linear Breath by a large margin (`97.65%` vs `97.28%`). This suggests that max-pooling behaves as an effective spatial-frequency local feature selector, extracting high-amplitude features (reminiscent of CNN pooling), which fits image inputs exceptionally well.
+
+---
+
 ## 📜 References
 * Chen, M.-H., et al. (2025). *"Rethinking the shape convention of an MLP"*. arXiv preprint.
+

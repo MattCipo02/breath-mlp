@@ -225,4 +225,246 @@ class DeepMLP(nn.Module):
         return out
 
 
+class FeaturePooling(nn.Module):
+    """
+    Feature-dimension 1D pooling module.
+    Downsamples a 1D feature vector of shape [batch_size, in_features]
+    to [batch_size, out_features] using Adaptive Max/Avg Pooling.
+    """
+    def __init__(self, out_features, pool_type="max"):
+        super().__init__()
+        self.out_features = out_features
+        self.pool_type = pool_type
+        if pool_type == "max":
+            self.pool = nn.AdaptiveMaxPool1d(out_features)
+        else:
+            self.pool = nn.AdaptiveAvgPool1d(out_features)
+            
+    def forward(self, x):
+        # Input shape: [batch_size, in_features]
+        # Unsqueeze to add a channel dimension: [batch_size, 1, in_features]
+        x_unsqueezed = x.unsqueeze(1)
+        out = self.pool(x_unsqueezed)
+        # Squeeze to return to: [batch_size, out_features]
+        return out.squeeze(1)
+
+
+class BreathMLPPool(nn.Module):
+    """
+    Breath MLP with Feature Pooling (BreathMLPPool).
+    Compresses representations using parameter-free 1D feature pooling (Max or Avg),
+    while expanding representations using standard linear projections.
+    Projected skip connections are retained between bottlenecks.
+    """
+    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True, 
+                 pool_type="max", activation="relu", use_norm=False):
+        super().__init__()
+        self.hidden_layers = hidden_layers
+        self.use_skips = use_skips
+        self.pool_type = pool_type
+        self.activation = activation
+        self.use_norm = use_norm
+        
+        # Optional Input LayerNorm
+        if use_norm:
+            self.input_norm = nn.LayerNorm(input_dim)
+        
+        # Selectable Activation
+        if activation == "gelu":
+            self.act = nn.GELU()
+        elif activation == "silu":
+            self.act = nn.SiLU()
+        else:
+            self.act = nn.ReLU()
+            
+        self.layers = nn.ModuleDict()
+        self.projections = nn.ModuleDict()
+        if use_norm:
+            self.norms = nn.ModuleDict()
+            
+        # Input projection
+        self.layers["input_proj"] = nn.Linear(input_dim, hidden_layers[0])
+        
+        i = 1
+        last_comp_idx = None
+        while i < len(hidden_layers):
+            comp_units = hidden_layers[i]
+            
+            # Compression is a pooling layer
+            self.layers[f"comp_{i}"] = FeaturePooling(comp_units, pool_type=pool_type)
+            
+            # Optional Bottleneck LayerNorm
+            if use_norm:
+                self.norms[f"norm_{i}"] = nn.LayerNorm(comp_units)
+            
+            # Projected skip connection between bottlenecks
+            if use_skips and last_comp_idx is not None:
+                prev_comp_units = hidden_layers[last_comp_idx]
+                proj_key = f"proj_{last_comp_idx}_to_{i}"
+                self.projections[proj_key] = nn.Linear(prev_comp_units, comp_units)
+                
+            last_comp_idx = i
+            
+            if i + 1 < len(hidden_layers):
+                exp_units = hidden_layers[i+1]
+                # Expansion is a linear layer
+                self.layers[f"exp_{i+1}"] = nn.Linear(comp_units, exp_units)
+                i += 2
+            else:
+                i += 1
+                
+        self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
+        
+    def forward(self, x):
+        # 1. Normalize input if enabled
+        if self.use_norm:
+            x = self.input_norm(x)
+            
+        # 2. First projection & activation
+        x = self.act(self.layers["input_proj"](x))
+        compression_tensors = {}
+        
+        i = 1
+        last_comp_idx = None
+        while i < len(self.hidden_layers):
+            # Apply pooling compression
+            comp_tensor = self.layers[f"comp_{i}"](x)
+            
+            # Apply projected skip connection if applicable
+            if self.use_skips and last_comp_idx is not None:
+                proj_key = f"proj_{last_comp_idx}_to_{i}"
+                prev_comp_tensor = compression_tensors[last_comp_idx]
+                proj = self.projections[proj_key](prev_comp_tensor)
+                comp_tensor = comp_tensor + proj
+                
+            # Apply activation
+            comp_tensor = self.act(comp_tensor)
+            
+            # Apply LayerNorm if enabled
+            if self.use_norm:
+                comp_tensor = self.norms[f"norm_{i}"](comp_tensor)
+                
+            compression_tensors[i] = comp_tensor
+            x = comp_tensor
+            last_comp_idx = i
+            
+            if i + 1 < len(self.hidden_layers):
+                # Apply linear expansion
+                x = self.act(self.layers[f"exp_{i+1}"](x))
+                i += 2
+            else:
+                i += 1
+                
+        out = self.output_layer(x)
+        return out
+
+
+class BreathMLPPurePool(nn.Module):
+    """
+    100% Parameter-Free Compression and Skip connections (BreathMLPPurePool).
+    Uses AdaptiveAvgPool1d (or MaxPool) for both main compression AND skip resizing.
+    Contains zero linear projection weights in the compression or skip paths.
+    """
+    def __init__(self, input_dim, hidden_layers, output_dim=1, use_skips=True, 
+                 pool_type="avg", activation="relu", use_norm=False):
+        super().__init__()
+        self.hidden_layers = hidden_layers
+        self.use_skips = use_skips
+        self.pool_type = pool_type
+        self.activation = activation
+        self.use_norm = use_norm
+        
+        # Optional Input LayerNorm
+        if use_norm:
+            self.input_norm = nn.LayerNorm(input_dim)
+            
+        # Selectable Activation
+        if activation == "gelu":
+            self.act = nn.GELU()
+        elif activation == "silu":
+            self.act = nn.SiLU()
+        else:
+            self.act = nn.ReLU()
+            
+        self.layers = nn.ModuleDict()
+        if use_norm:
+            self.norms = nn.ModuleDict()
+            
+        # Input projection
+        self.layers["input_proj"] = nn.Linear(input_dim, hidden_layers[0])
+        
+        i = 1
+        last_comp_idx = None
+        while i < len(hidden_layers):
+            comp_units = hidden_layers[i]
+            
+            # Main path compression: parameter-free pooling
+            self.layers[f"comp_{i}"] = FeaturePooling(comp_units, pool_type=pool_type)
+            
+            # Optional Bottleneck LayerNorm
+            if use_norm:
+                self.norms[f"norm_{i}"] = nn.LayerNorm(comp_units)
+                
+            # Skip connection downsampler: also parameter-free pooling!
+            if use_skips and last_comp_idx is not None:
+                # We dynamically downsample using FeaturePooling from last bottleneck size to current bottleneck size
+                self.layers[f"skip_pool_{last_comp_idx}_to_{i}"] = FeaturePooling(comp_units, pool_type=pool_type)
+                
+            last_comp_idx = i
+            
+            if i + 1 < len(hidden_layers):
+                exp_units = hidden_layers[i+1]
+                # Expansion: standard linear layer
+                self.layers[f"exp_{i+1}"] = nn.Linear(comp_units, exp_units)
+                i += 2
+            else:
+                i += 1
+                
+        self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
+        
+    def forward(self, x):
+        # 1. Normalize input if enabled
+        if self.use_norm:
+            x = self.input_norm(x)
+            
+        # 2. First projection & activation
+        x = self.act(self.layers["input_proj"](x))
+        compression_tensors = {}
+        
+        i = 1
+        last_comp_idx = None
+        while i < len(self.hidden_layers):
+            # Apply pooling compression
+            comp_tensor = self.layers[f"comp_{i}"](x)
+            
+            # Apply parameter-free skip downsampling
+            if self.use_skips and last_comp_idx is not None:
+                prev_comp_tensor = compression_tensors[last_comp_idx]
+                proj = self.layers[f"skip_pool_{last_comp_idx}_to_{i}"](prev_comp_tensor)
+                comp_tensor = comp_tensor + proj
+                
+            # Apply activation
+            comp_tensor = self.act(comp_tensor)
+            
+            # Apply LayerNorm if enabled
+            if self.use_norm:
+                comp_tensor = self.norms[f"norm_{i}"](comp_tensor)
+                
+            compression_tensors[i] = comp_tensor
+            x = comp_tensor
+            last_comp_idx = i
+            
+            if i + 1 < len(self.hidden_layers):
+                # Apply linear expansion
+                x = self.act(self.layers[f"exp_{i+1}"](x))
+                i += 2
+            else:
+                i += 1
+                
+        out = self.output_layer(x)
+        return out
+
+
+
+
 
