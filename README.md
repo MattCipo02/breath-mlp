@@ -71,7 +71,7 @@ In the following sections, we demonstrate how this evolution allows **BreathPool
 
 ## ⚡ Feature Pooling & Parameter-Free Compression (BreathMLPPool)
 
-To maximize parameter efficiency and accelerate training, we replaced the linear compression layers in the Breath MLP with parameter-free **1D Adaptive Feature Pooling** (Max, Average, and learnable Hybrid pooling).
+To maximize parameter efficiency and accelerate training, we replaced the linear compression layers in the Breath MLP with parameter-free **Adaptive Feature Pooling** (Max, Average, and learnable Hybrid pooling).
 
 ### 📐 The Three Pooling Strategies:
 1. 🏆 **BreathPool Max:** Replaces compression and skip resizing paths with `AdaptiveMaxPool1d`. Serves as a sparse, high-amplitude feature extractor (reminiscent of CNN pooling), which fits image and text classification exceptionally well.
@@ -90,6 +90,9 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 #### A. Robotics Inverse Dynamics (SARCOS Dataset - MinMaxScaler $[0,1]$)
 * **Test Objective:** Predict joint torques from 21 kinematic features.
+* **Network Layer Configurations:**
+  * **Deep Standard:** `[21, 512, 256, 128, 64, 32, 1]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[21, 512, 128, 256, 64, 128, 32, 64, 1]`
 
 | Model | Parameters | Training Time (Mean) | $R^2$ Score (5-fold CV) | MSE (5-fold CV) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -101,6 +104,9 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 #### B. Regression (California Housing - MinMaxScaler $[0,1]$)
 * **Test Objective:** Predict median house values from 8 demographic features.
+* **Network Layer Configurations:**
+  * **Deep Standard:** `[8, 512, 256, 128, 64, 32, 16, 1]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[8, 512, 128, 256, 64, 128, 32, 64, 16, 32, 1]`
 
 | Model | Parameters | Training Time (Mean) | $R^2$ Score (5-fold CV) | MSE (5-fold CV) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -112,6 +118,9 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 #### C. Image Classification (MNIST Dataset - Raw Target Mapping)
 * **Test Objective:** Classify hand-written digits (10 classes) using raw target pooling.
+* **Network Layer Configurations:**
+  * **Deep Standard:** `[784, 1024, 512, 256, 128, 64, 32, 16, 10]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[784, 1024, 256, 512, 128, 256, 64, 128, 32, 64, 16, 32, 10]`
 
 | Model | Parameters | Training Time (Mean) | Test Accuracy (5-fold CV) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: |
@@ -129,6 +138,9 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 ##### D1. Canonical Configuration (FFN_START = 4x d_model)
 In this setup, the FFN expansion is set to `4 * d_model = 1024`. **This 4x multiplier represents the canonical size standardly used in production Transformers (such as GPT-2 and BERT).** 
+* **Network Layer Configurations:**
+  * **Standard FFN:** `[256, 1024, 256]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[256, 1024, 256]`
 
 For `BreathPool`, because the architecture does not have room for intermediate oscillations (`hidden_layers = [1024]`), the final compression step is performed entirely by parameter-free pooling. This **eliminates the second linear projection** of the FFN, cutting the block's parameters by **50%**.
 
@@ -144,6 +156,9 @@ For `BreathPool`, because the architecture does not have room for intermediate o
 
 ##### D2. Expanded Parameter-Matched Configuration (FFN_START = 8x d_model)
 Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline is expanded to `18 * d_model = 4864` intermediate width to parameter-match the linear Breath FFN (`[2048, 512, 1024]` hidden layout). BreathPool models save **55.5% of FFN block parameters** (and 49.7% of total model parameters) by performing all bottleneck contractions via pooling.
+* **Network Layer Configurations:**
+  * **Standard FFN (18x):** `[256, 4608, 256]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[256, 2048, 512, 1024, 256]`
 
 | Model | Model Params | Training Time (Mean) | Validation Loss (3-seed) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: |
@@ -158,6 +173,9 @@ Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline
 
 #### E. Vision Transformer FFN Integration (ViT on CIFAR-10 - 3-Seed)
 * **Test Objective:** Image classification with a patch-based ViT ($d_{\text{model}}=192$, 4 layers, 4 heads, patch size 4×4) trained for 5 epochs across 3 seeds. BreathPool models perform all contractions and the final mapping via pooling, resulting in **61.8% FFN block parameter savings** (and **56.2% total model parameter savings**).
+* **Network Layer Configurations:**
+  * **Standard FFN:** `[192, 4032, 192]`
+  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[192, 1536, 384, 768, 192]`
 
 | Model | Parameters | Training Time (Mean) | Test Accuracy (3-seed) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: |
