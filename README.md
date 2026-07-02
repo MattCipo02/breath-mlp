@@ -6,7 +6,7 @@ This repository provides the official implementation, architecture generator, an
 
 ---
 
-### 💡 The Evolution of Breath MLP (A Step-by-Step Architectural Lecture)
+### 💡 The Evolution of Breath MLP (A Step-by-Step Architectural Development)
 
 To understand how **Breath MLP** works, let us retrace the logical steps and engineering choices that led to its formulation, starting from standard Transformer FFNs all the way to parameter-free feature pooling.
 
@@ -30,11 +30,11 @@ The core idea of **Breath MLP** is to systematically alternate:
 ```
 Input (N) ──> [Dense (512)] (Expansion 1)
                  │
-              [Dense (128)] (Bottleneck 1) ──────────┐
+              [Dense (128)] (Bottleneck 1) ───────────┐
                  │                                    │ (Projected Skip Connection)
-              [Dense (256)] (Expansion 2)            │
-                 │                                    │
-              [Dense (64)]  (Bottleneck 2) <──────────┘ [Linear Projection (128 -> 64)]
+              [Dense (256)] (Expansion 2)             │
+                 │                                    │ [Linear Projection (128 -> 64)]
+              [Dense (64)]  (Bottleneck 2) <──────────┘ 
                  │
               [Dense (128)] (Expansion 3)
                  │
@@ -47,7 +47,7 @@ Input (N) ──> [Dense (512)] (Expansion 1)
 To avoid ad-hoc heuristic designs and define a geometrically rigorous topology, we establish our core constraints:
 1. **Constant Oscillation Factors:** Every contraction reduces the dimension by a constant factor $C = 0.25$ (1/4 of the preceding peak). Every expansion increases the dimension by a constant factor $E = 2.0$ (doubles the preceding bottleneck).
 2. **Continuous Decay (Envelope):** To guarantee convergence and avoid infinite loops at constant widths, the height of the peaks ($P_1 > P_2 > P_3 \dots$) and bottlenecks ($B_1 > B_2 > B_3 \dots$) must continuously decay at each cycle, forming a dampened oscillating wave.
-3. **Strict Output Bottleneck Constraint:** No intermediate bottleneck can be smaller than or equal to the final output dimension ($d_{\text{out}}$). If a compression step falls below or matches this threshold, the loop breaks immediately. This guarantees that the final output mapping is the only true output contraction, preventing redundant bottlenecks and identity projections.
+3. **Strict Output Bottleneck Constraint:** No intermediate bottleneck can be smaller than or equal to the final output dimension ($d_{\text{out}}$). If a compression step falls below or matches this threshold, the loop breaks immediately. Consequently, every hidden layer is guaranteed to be strictly larger than the output dimension, ensuring that the final transition from the last latent state to the actual output layer is resolved via a parameter-free feature pooling contraction, eliminating the need for a final heavy linear projection.
 
 ---
 
@@ -199,7 +199,7 @@ Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline
 3. **Domain-Dependent Pooling Specialization (Critical Finding):**
    | Domain | Winner | Reason |
    | :--- | :--- | :--- |
-   | **Tabular/Regression** (SARCOS, California) | 🏆 `BreathPool Hybrid` | A mixture of continuous physical features and threshold-like behaviors benefits from learnable, layer-wise blending of Avg and Max pooling. |
+   | **Structured Tabular / Regression** (SARCOS, California) | 🏆 `BreathPool Avg` / `Hybrid` | Dataset-dependent: learnable layer-wise blending (`Hybrid`) wins on robotics dynamics (SARCOS), while pure average pooling (`Avg`) wins on California Housing. |
    | **Language Modeling** (NanoGPT) | 🏆 `BreathPool Max` | Tokens are sparse categorical events; max selection mimics the selective routing of self-attention. |
    | **Vision/Image Classification** (ViT, CIFAR-10) | 🏆 `BreathPool Avg` | Patch features are spatially dense and continuous; average pooling preserves texture and local patterns better than max selection. |
 4. **Learnable Hybrid Pooling (Adaptive Alpha Blending):**
