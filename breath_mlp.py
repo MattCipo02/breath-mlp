@@ -242,8 +242,8 @@ class DeepMLP(nn.Module):
 
 class FeaturePooling(nn.Module):
     """
-    Feature-dimension 1D pooling module.
-    Downsamples a 1D feature vector of shape [batch_size, in_features]
+    Feature-dimension pooling module.
+    Downsamples a feature vector of shape [batch_size, in_features]
     to [batch_size, out_features] using Adaptive Max/Avg/Hybrid Pooling.
     """
     def __init__(self, out_features, pool_type="max"):

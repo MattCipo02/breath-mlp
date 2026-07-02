@@ -221,9 +221,9 @@ pip install torch torchvision scikit-learn pandas scipy numpy
 ```
 
 ### 2. Run the Benchmarks
-* **Tabular & Small-scale Benchmarks**: Run the default regression and classification tests:
+* **Tabular & Small-scale Benchmarks**: Run the pooling and baseline comparison tests (SARCOS, California, MNIST):
   ```bash
-  python benchmark.py
+  python pool_benchmark.py --dataset sarcos
   ```
 * **Image Denoising Benchmark (ImageNet-32)**: Compare Hourglass vs Breath MLP on natural image restoration:
   ```bash
