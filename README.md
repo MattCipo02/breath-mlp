@@ -194,8 +194,8 @@ Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline
 
 1. **Massive Parameter Reductions:**
    By removing learnable parameters from compression and skip paths, **`BreathPool`** variants reduce the parameter footprint by **up to 72.9%** on tabular tasks (California, SARCOS), **up to 61.8% on FFN blocks in Vision Transformers (ViT)**, and **up to 55.5% on FFN blocks in GPT models**, with negligible or positive performance impact.
-2. **Significant Training Speedups:**
-   `BreathPool` models achieve a **43.0% training speedup** on large Transformer workloads (NanoGPT 8x) and a **33.3% speedup** on Vision Transformers (ViT) on GPU compared to standard parameter-matched baselines, as parameter-free pooling completely bypasses expensive GEMM matrix operations.
+2. **Significant Training Speedups at Scale:**
+   `BreathPool` models achieve a **43.0% training speedup** on large Transformer workloads (NanoGPT 8x) and a **33.3% speedup** on Vision Transformers (ViT) compared to standard parameter-matched baselines on GPU. This highlights that **pooling becomes highly competitive at larger dimensional scales**: while in small networks the memory-bound overhead (reshape/permute operations) of pooling can exceed the negligible linear layer compute, at scale, replacing massive GEMM matrix multiplications with parameter-free pooling completely bypasses the primary training bottleneck.
 3. **Domain-Dependent Pooling Specialization (Critical Finding):**
    | Domain | Winner | Reason |
    | :--- | :--- | :--- |
@@ -248,7 +248,7 @@ pip install torch torchvision scikit-learn pandas scipy numpy
 
 ```python
 import torch
-from breath_mlp import generate_breath_architecture, BreathMLP
+from breath_mlp import generate_breath_architecture, BreathMLPPool
 
 # 1. Generate layers sequence: [512, 128, 256, 64, 128, 32]
 hidden_layers = generate_breath_architecture(
@@ -258,18 +258,22 @@ hidden_layers = generate_breath_architecture(
     min_width=32
 )
 
-# 2. Instantiate Model
-model = BreathMLP(
+# 2. Instantiate Parameter-Free BreathMLPPool Model
+# All core properties are fully customizable to fit your dataset needs:
+model = BreathMLPPool(
     input_dim=21, 
     hidden_layers=hidden_layers, 
     output_dim=1, 
     use_skips=True,
-    activation="silu",
-    use_norm=True
+    
+    # --- Customization Properties ---
+    pool_type="hybrid",      # Pooling strategy: "max", "avg", or "hybrid"
+    activation="relu",       # Activation: "relu", "gelu", "silu", "tanh", "elu", "leaky_relu"
+    use_norm=True,           # Toggle Layer Normalization (True / False)
+    pool_output=True         # Toggle 100% parameter-free output pooling (True / False)
 )
 
 print(model)
 ```
 
----
 
