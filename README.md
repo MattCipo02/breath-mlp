@@ -134,9 +134,9 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 
 #### D. Transformer FFN Integration (NanoGPT on Tiny Shakespeare - 3-Seed)
-* **Test Objective:** Autoregressive character-level language modeling trained for 1000 iterations across 3 seeds. We compare two distinct regimes: a canonical 4x capacity setup and a larger parameter-matched 8x setup.
+* **Test Objective:** Autoregressive character-level language modeling trained for 1000 iterations across 3 seeds on the canonical 4x capacity setup.
 
-##### D1. Canonical Configuration (FFN_START = 4x d_model)
+##### Canonical Configuration (FFN_START = 4x d_model)
 In this setup, the FFN expansion is set to `4 * d_model = 1024`. **This 4x multiplier represents the canonical size standardly used in production Transformers (such as GPT-2 and BERT).** 
 * **Network Layer Configurations:**
   * **Standard FFN:** `[256, 1024, 256]`
@@ -153,23 +153,6 @@ For `BreathPool`, because the architecture does not have room for intermediate o
 | **BreathPool Hybrid** | 3,233,863 *(-32.7%)* | 248.7s | `1.5892 +/- 0.0099` | -50.0% |
 
 * **Key Finding:** Replacing the entire second linear layer of a standard FFN block with parameter-free **Max Pooling** matches standard FFN validation loss while saving **50.0% of the FFN block parameters** (and 32.7% of the entire GPT model parameters). **Importantly, training speed is fully preserved, matching standard FFN training time (221.2s vs 222.2s) with zero computational or training overhead.**
-
-##### D2. Expanded Parameter-Matched Configuration (FFN_START = 8x d_model)
-Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline is expanded to `18 * d_model = 4864` intermediate width to parameter-match the linear Breath FFN (`[2048, 512, 1024]` hidden layout). BreathPool models save **55.5% of FFN block parameters** (and 49.7% of total model parameters) by performing all bottleneck contractions via pooling.
-* **Network Layer Configurations:**
-  * **Standard FFN (18x):** `[256, 4608, 256]`
-  * **Breath (Linear) / BreathPool (Max, Avg, Hybrid):** `[256, 2048, 512, 1024, 256]`
-
-| Model | Model Params | Training Time (Mean) | Validation Loss (3-seed) | Δ Params (Total) |
-| :--- | :---: | :---: | :---: | :---: |
-| **Standard (18x)** | 15,836,737 | 390.7s | `1.5740 +/- 0.0144` | Baseline |
-| **Breath (Linear)** | 15,839,809 | 386.0s | `1.5460 +/- 0.0092` | +0.02% |
-| 🏆 **BreathPool Max** | **7,970,881** *(-49.7%)* | 269.7s *(-31.0%)* | **`1.5308 +/- 0.0123`** | **-49.7%** |
-| **BreathPool Avg** | **7,970,881** *(-49.7%)* | **222.5s** *(-43.0%)* | `1.5549 +/- 0.0093` | -49.7% |
-| **BreathPool Hybrid** | 7,970,893 *(-49.7%)* | 276.0s *(-29.4%)* | `1.5336 +/- 0.0102` | -49.7% |
-
-* **Key Finding:** By nesting multiple compression/expansion cycles and resolving bottlenecks via pooling, **BreathPool Max** improves validation loss by **-0.0432** over Standard and **-0.0152** over Breath (Linear) while using **half the parameters** (49.7% reduction). 
-* **Training Speedup:** Because parameter-free pooling replaces heavy linear projections, training speed is dramatically enhanced. **BreathPool Avg** achieves a **43.0% training speedup** (222.5s vs 390.7s) and **BreathPool Max** achieves a **31.0% speedup** (269.7s vs 390.7s) on laptop GPU compared to the parameter-matched standard transformer baseline.
 
 #### E. Vision Transformer FFN Integration (ViT on CIFAR-10 - 3-Seed)
 * **Test Objective:** Image classification with a patch-based ViT ($d_{\text{model}}=192$, 4 layers, 4 heads, patch size 4×4) trained for 5 epochs across 3 seeds. BreathPool models perform all contractions and the final mapping via pooling, resulting in **61.8% FFN block parameter savings** (and **56.2% total model parameter savings**).
@@ -193,9 +176,9 @@ Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline
 ### 🧠 Key Takeaways on Feature Pooling
 
 1. **Massive Parameter Reductions:**
-   By removing learnable parameters from compression and skip paths, **`BreathPool`** variants reduce the parameter footprint by **up to 72.9%** on tabular tasks (California, SARCOS), **up to 61.8% on FFN blocks in Vision Transformers (ViT)**, and **up to 55.5% on FFN blocks in GPT models**, with negligible or positive performance impact.
+   By removing learnable parameters from compression and skip paths, **`BreathPool`** variants reduce the parameter footprint by **up to 72.9%** on tabular tasks (California, SARCOS), **up to 61.8% on FFN blocks in Vision Transformers (ViT)**, and **up to 50.0% on FFN blocks in GPT models**, with negligible or positive performance impact.
 2. **Significant Training Speedups at Scale:**
-   `BreathPool` models achieve a **43.0% training speedup** on large Transformer workloads (NanoGPT 8x) and a **33.3% speedup** on Vision Transformers (ViT) compared to standard parameter-matched baselines on GPU. This highlights that **pooling becomes highly competitive at larger dimensional scales**: while in small networks the memory-bound overhead (reshape/permute operations) of pooling can exceed the negligible linear layer compute, at scale, replacing massive GEMM matrix multiplications with parameter-free pooling completely bypasses the primary training bottleneck.
+   `BreathPool` models achieve a **33.3% speedup** on Vision Transformers (ViT) compared to standard parameter-matched baselines on GPU. This highlights that **pooling becomes highly competitive at larger dimensional scales**: while in small networks the memory-bound overhead (reshape/permute operations) of pooling can exceed the negligible linear layer compute, at scale, replacing massive GEMM matrix multiplications with parameter-free pooling completely bypasses the primary training bottleneck.
 3. **Domain-Dependent Pooling Specialization (Critical Finding):**
    | Domain | Winner | Reason |
    | :--- | :--- | :--- |
@@ -205,7 +188,7 @@ Here, the FFN starts with a width of `8 * d_model = 2048`. The Standard baseline
 4. **Learnable Hybrid Pooling (Adaptive Alpha Blending):**
    The **`BreathPool Hybrid`** model dynamically blends Max and Average pooling using a learnable weight $\sigma(\alpha)$ per layer.
    * **On Tabular Tasks:** Learns highly customizable mixtures (e.g. averaging ~54% Max Pool on California, and ~51% Max Pool on SARCOS), achieving the highest $R^2$ scores among all pooling variants on SARCOS.
-   * **On NanoGPT:** Achieves stable convergence (Validation Loss `1.5336 +/- 0.0102` for 8x FFN), performing on par with the pure Max winner.
+   * **On NanoGPT:** Achieves stable convergence (Validation Loss `1.5892 +/- 0.0099` for 4x FFN), performing close to the baseline.
    * **On ViT:** Achieves `55.32% +/- 1.06%` accuracy, closely matching the pure Avg winner (`55.84%`) with exceptionally low variance ($\pm 1.06\%$).
 
 ---
