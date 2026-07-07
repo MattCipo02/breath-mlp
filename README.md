@@ -110,10 +110,10 @@ We utilize **100% parameter-free compression and output mapping** for all poolin
 
 | Model | Parameters | Training Time (Mean) | $R^2$ Score (5-fold CV) | MSE (5-fold CV) | Δ Params (Total) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Deep Standard** | 179,713 | 21s | `0.7828 +/- 0.0089` | `0.2892 +/- 0.0150` | Baseline |
+| 🏆 **Deep Standard** | 179,713 | 21s | **`0.7828 +/- 0.0089`** | **`0.2892 +/- 0.0150`** | Baseline |
 | Breath + Skips (Lin) | 146,785 | 34s | `0.7771 +/- 0.0135` | `0.2970 +/- 0.0220` | -18.3% |
 | **BreathPool Max** | **48,608** | **31s** | `0.7402 +/- 0.0232` | `0.3458 +/- 0.0317` | **-72.9%** |
-| 🏆 **BreathPool Avg** | 48,608 | 31s | **`0.7484 +/- 0.0090`** | **`0.3350 +/- 0.0130`** | -72.9% |
+| **BreathPool Avg** | 48,608 | 31s | `0.7484 +/- 0.0090` | `0.3350 +/- 0.0130` | -72.9% |
 | **BreathPool Hybrid** | **48,616** | 56s | `0.7344 +/- 0.0161` | `0.3538 +/- 0.0248` | **-72.9%** |
 
 #### C. Image Classification (MNIST Dataset - Raw Target Mapping)
